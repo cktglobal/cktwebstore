@@ -59,12 +59,32 @@ async function hmacSha256Hex(text: string, secret: string): Promise<string> {
 // Cuba beberapa kombinasi susunan/separator yang biasa digunakan implementasi
 // Billplz (lihat NOTA di atas fail ni), pulangkan label kombinasi pertama
 // yang padan dengan signature diterima, atau null kalau tiada satu pun padan.
+// Pecahkan rawBody secara literal (TANPA decode value — kekal bentuk
+// percent-encoded asal, cth "%40" bukan "@") — sebahagian implementasi
+// Billplz mengira signature atas bentuk mentah ni, bukan nilai ter-decode.
+function parseRawEntries(rawBody: string): [string, string][] {
+  const entries: [string, string][] = [];
+  for (const segment of rawBody.split("&")) {
+    if (!segment) continue;
+    const eqIdx = segment.indexOf("=");
+    const rawKey = eqIdx === -1 ? segment : segment.slice(0, eqIdx);
+    const rawValue = eqIdx === -1 ? "" : segment.slice(eqIdx + 1);
+    const key = decodeURIComponent(rawKey.replace(/\+/g, " "));
+    if (key === "x_signature") continue;
+    entries.push([key, rawValue]);
+  }
+  return entries;
+}
+
 async function verifySignature(
   originalOrderEntries: [string, string][],
+  rawBody: string,
   receivedSignature: string,
   secret: string,
 ): Promise<string | null> {
   const sortedEntries = [...originalOrderEntries].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  const rawEntries = parseRawEntries(rawBody);
+  const sortedRawEntries = [...rawEntries].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   const candidates: Record<string, string> = {
     "urutan-asal|tiada-separator": originalOrderEntries.map(([k, v]) => `${k}${v}`).join(""),
     "urutan-asal|pipe-separator": originalOrderEntries.map(([k, v]) => `${k}${v}`).join("|"),
@@ -72,6 +92,12 @@ async function verifySignature(
     "susun-nama|pipe-separator": sortedEntries.map(([k, v]) => `${k}${v}`).join("|"),
     "urutan-asal|query-string": originalOrderEntries.map(([k, v]) => `${k}=${v}`).join("&"),
     "susun-nama|query-string": sortedEntries.map(([k, v]) => `${k}=${v}`).join("&"),
+    "mentah-urutan-asal|tiada-separator": rawEntries.map(([k, v]) => `${k}${v}`).join(""),
+    "mentah-urutan-asal|pipe-separator": rawEntries.map(([k, v]) => `${k}${v}`).join("|"),
+    "mentah-susun-nama|tiada-separator": sortedRawEntries.map(([k, v]) => `${k}${v}`).join(""),
+    "mentah-susun-nama|pipe-separator": sortedRawEntries.map(([k, v]) => `${k}${v}`).join("|"),
+    "mentah-urutan-asal|query-string": rawEntries.map(([k, v]) => `${k}=${v}`).join("&"),
+    "mentah-susun-nama|query-string": sortedRawEntries.map(([k, v]) => `${k}=${v}`).join("&"),
   };
   const receivedLower = receivedSignature.toLowerCase();
   for (const [label, source] of Object.entries(candidates)) {
@@ -170,7 +196,7 @@ Deno.serve(async (req) => {
       if (key === "x_signature") continue;
       entries.push([key, value]);
     }
-    const matchedFormat = await verifySignature(entries, receivedSignature, BILLPLZ_X_SIGNATURE_KEY);
+    const matchedFormat = await verifySignature(entries, rawBody, receivedSignature, BILLPLZ_X_SIGNATURE_KEY);
 
     if (!matchedFormat) {
       console.error("billplz-notification: signature tak sepadan (semua format dicuba gagal) — mungkin bukan dari Billplz sebenar, atau BILLPLZ_X_SIGNATURE_KEY salah");
