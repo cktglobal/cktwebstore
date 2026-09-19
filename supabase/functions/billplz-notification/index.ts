@@ -22,12 +22,16 @@
 //                              Account Settings jika guna X Signature akaun)
 //   SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY -> automatik disediakan Supabase
 //
-// NOTA: Algoritma pengesahan X-Signature di bawah dibina berdasarkan
-// dokumentasi rasmi Billplz (susun parameter mengikut nama, gabung
-// "namavalue" setiap satu dengan separator "|", HMAC-SHA256 hex guna
-// X Signature Key). WAJIB uji end-to-end dengan akaun SANDBOX Billplz dulu
-// sebelum live — kalau signature sentiasa "tak sepadan", semak semula
-// susunan/format ni terhadap dokumentasi terkini Billplz.
+// NOTA pasal X-Signature: dokumentasi/implementasi Billplz yang tersedia
+// tidak seragam pasal susunan parameter (ikut urutan asal dihantar, ATAU
+// disusun mengikut nama) dan cara gabung (terus "namavalue" TANPA separator,
+// ATAU dengan separator "|"). Sebab tu verifySignature() di bawah cuba
+// BEBERAPA kombinasi popular sekaligus dan terima mana-mana yang padan —
+// ini tak kurangkan keselamatan (orang jahat tetap perlu tahu
+// BILLPLZ_X_SIGNATURE_KEY sebenar untuk hasilkan mana-mana signature yang
+// sah), cuma lebih toleran kepada variasi format. verifySignature() log
+// kombinasi mana yang padan (console.log, bukan console.error) — boleh
+// rujuk log tu untuk kemas kini code ni guna SATU format yang disahkan sahaja.
 
 const BILLPLZ_X_SIGNATURE_KEY = Deno.env.get("BILLPLZ_X_SIGNATURE_KEY")!;
 
@@ -50,6 +54,31 @@ async function hmacSha256Hex(text: string, secret: string): Promise<string> {
   );
   const sigBuffer = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text));
   return toHex(new Uint8Array(sigBuffer));
+}
+
+// Cuba beberapa kombinasi susunan/separator yang biasa digunakan implementasi
+// Billplz (lihat NOTA di atas fail ni), pulangkan label kombinasi pertama
+// yang padan dengan signature diterima, atau null kalau tiada satu pun padan.
+async function verifySignature(
+  originalOrderEntries: [string, string][],
+  receivedSignature: string,
+  secret: string,
+): Promise<string | null> {
+  const sortedEntries = [...originalOrderEntries].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  const candidates: Record<string, string> = {
+    "urutan-asal|tiada-separator": originalOrderEntries.map(([k, v]) => `${k}${v}`).join(""),
+    "urutan-asal|pipe-separator": originalOrderEntries.map(([k, v]) => `${k}${v}`).join("|"),
+    "susun-nama|tiada-separator": sortedEntries.map(([k, v]) => `${k}${v}`).join(""),
+    "susun-nama|pipe-separator": sortedEntries.map(([k, v]) => `${k}${v}`).join("|"),
+    "urutan-asal|query-string": originalOrderEntries.map(([k, v]) => `${k}=${v}`).join("&"),
+    "susun-nama|query-string": sortedEntries.map(([k, v]) => `${k}=${v}`).join("&"),
+  };
+  const receivedLower = receivedSignature.toLowerCase();
+  for (const [label, source] of Object.entries(candidates)) {
+    const computed = await hmacSha256Hex(source, secret);
+    if (computed === receivedLower) return label;
+  }
+  return null;
 }
 
 function escapeHtml(text: string): string {
@@ -134,17 +163,16 @@ Deno.serve(async (req) => {
       if (key === "x_signature") continue;
       entries.push([key, value]);
     }
-    entries.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-    const signatureSource = entries.map(([k, v]) => `${k}${v}`).join("|");
-    const expectedSignature = await hmacSha256Hex(signatureSource, BILLPLZ_X_SIGNATURE_KEY);
+    const matchedFormat = await verifySignature(entries, receivedSignature, BILLPLZ_X_SIGNATURE_KEY);
 
-    if (expectedSignature !== receivedSignature.toLowerCase()) {
-      console.error("billplz-notification: signature tak sepadan — mungkin bukan dari Billplz sebenar, atau BILLPLZ_X_SIGNATURE_KEY salah");
+    if (!matchedFormat) {
+      console.error("billplz-notification: signature tak sepadan (semua format dicuba gagal) — mungkin bukan dari Billplz sebenar, atau BILLPLZ_X_SIGNATURE_KEY salah");
       return new Response(JSON.stringify({ ok: false, error: "Invalid signature" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    console.log(`billplz-notification: signature sah (format: ${matchedFormat})`);
 
     // 2. Signature sah — proses notifikasi
     const orderId = params.get("reference_1") ?? "";
