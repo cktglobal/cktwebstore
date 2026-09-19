@@ -156,6 +156,13 @@ Deno.serve(async (req) => {
 
     const receivedSignature = params.get("x_signature") ?? "";
 
+    // DEBUG SEMENTARA — log raw body & panjang secret supaya boleh kesan sama
+    // ada nama field tak macam dijangka, atau BILLPLZ_X_SIGNATURE_KEY tersilap
+    // (extra space/newline dsb). BUANG log ni lepas isu signature selesai.
+    console.log("billplz-notification DEBUG rawBody:", rawBody);
+    console.log("billplz-notification DEBUG receivedSignature:", JSON.stringify(receivedSignature), "length:", receivedSignature.length);
+    console.log("billplz-notification DEBUG secret length:", BILLPLZ_X_SIGNATURE_KEY.length, "secret first/last char code:", BILLPLZ_X_SIGNATURE_KEY.charCodeAt(0), BILLPLZ_X_SIGNATURE_KEY.charCodeAt(BILLPLZ_X_SIGNATURE_KEY.length - 1));
+
     // 1. Sahkan tandatangan dulu — TOLAK terus kalau tak sepadan, ini pertahanan
     //    utama supaya orang lain tak boleh hantar notifikasi palsu "dah bayar"
     const entries: [string, string][] = [];
