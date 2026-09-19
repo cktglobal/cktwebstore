@@ -76,12 +76,51 @@ function parseRawEntries(rawBody: string): [string, string][] {
   return entries;
 }
 
+// Field-field SPESIFIK yang Billplz gunakan untuk Callback signature (disahkan
+// dari source code plugin RASMI Billplz — Billplz/Billplz-for-WooCommerce,
+// includes/helpers/billplz_wpconnect.php). Field lain (cth reference_1, kalau
+// wujud pun) TIDAK termasuk dalam pengiraan signature.
+const BILLPLZ_CALLBACK_SIGNATURE_FIELDS = [
+  "amount", "collection_id", "due_at", "email", "id", "mobile",
+  "name", "paid_amount", "transaction_id", "transaction_status",
+  "paid_at", "paid", "state", "url",
+];
+
+// Formula RASMI Billplz: untuk setiap field di atas yang wujud & tak kosong,
+// gabung "key"+"value" (TANPA separator), kumpul semua jadi satu list, SUSUN
+// keseluruhan STRING GABUNGAN tu (bukan susun ikut nama key sahaja — ini beza
+// penting untuk field macam paid/paid_amount/paid_at yang ada awalan sama),
+// gabung dengan "|", HMAC-SHA256, hex.
+async function computeOfficialBillplzSignature(params: URLSearchParams, secret: string): Promise<string> {
+  const pairs: string[] = [];
+  for (const key of BILLPLZ_CALLBACK_SIGNATURE_FIELDS) {
+    const value = params.get(key);
+    if (value === null || value === "") continue;
+    pairs.push(`${key}${value}`);
+  }
+  pairs.sort((a, b) => {
+    const la = a.toLowerCase();
+    const lb = b.toLowerCase();
+    return la < lb ? -1 : la > lb ? 1 : 0;
+  });
+  return await hmacSha256Hex(pairs.join("|"), secret);
+}
+
 async function verifySignature(
+  params: URLSearchParams,
   originalOrderEntries: [string, string][],
   rawBody: string,
   receivedSignature: string,
   secret: string,
 ): Promise<string | null> {
+  const receivedLower = receivedSignature.toLowerCase();
+
+  // Cuba formula RASMI dahulu (paling berkemungkinan betul)
+  const official = await computeOfficialBillplzSignature(params, secret);
+  if (official === receivedLower) return "rasmi-billplz-woocommerce";
+
+  // Fallback: kombinasi lain (kekal sebagai jaring keselamatan sekiranya versi
+  // API/dokumentasi berbeza)
   const sortedEntries = [...originalOrderEntries].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   const rawEntries = parseRawEntries(rawBody);
   const sortedRawEntries = [...rawEntries].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
@@ -99,7 +138,6 @@ async function verifySignature(
     "mentah-urutan-asal|query-string": rawEntries.map(([k, v]) => `${k}=${v}`).join("&"),
     "mentah-susun-nama|query-string": sortedRawEntries.map(([k, v]) => `${k}=${v}`).join("&"),
   };
-  const receivedLower = receivedSignature.toLowerCase();
   for (const [label, source] of Object.entries(candidates)) {
     const computed = await hmacSha256Hex(source, secret);
     if (computed === receivedLower) return label;
@@ -196,7 +234,7 @@ Deno.serve(async (req) => {
       if (key === "x_signature") continue;
       entries.push([key, value]);
     }
-    const matchedFormat = await verifySignature(entries, rawBody, receivedSignature, BILLPLZ_X_SIGNATURE_KEY);
+    const matchedFormat = await verifySignature(params, entries, rawBody, receivedSignature, BILLPLZ_X_SIGNATURE_KEY);
 
     if (!matchedFormat) {
       console.error("billplz-notification: signature tak sepadan (semua format dicuba gagal) — mungkin bukan dari Billplz sebenar, atau BILLPLZ_X_SIGNATURE_KEY salah");
