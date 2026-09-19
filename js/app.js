@@ -629,7 +629,7 @@
     if(!filtered.length){
       el.innerHTML = state.products.length
         ? `<div class="empty-state"><div class="icon">🔍</div><div>${q ? 'Tiada produk sepadan dengan carian.' : 'Tiada produk dalam kategori ini.'}</div></div>`
-        : '<div class="empty-state"><div class="icon">🛍️</div><div>Belum ada produk lagi.<br>Sila tambah produk di Login.</div></div>';
+        : '<div class="empty-state"><div class="icon">🛍️</div><div>Belum ada produk lagi.<br>Admin: sila tambah produk (buka /?admin=1).</div></div>';
       return;
     }
     el.innerHTML = filtered.map(p=>{
@@ -641,7 +641,7 @@
         : `<div class="stock-tag" style="color:var(--text-muted);font-size:12px;">Baki stok: ${stockVal}</div>`;
       return `
       <div class="product-card ${outOfStock?'out-of-stock':''}" data-product-id="${p.id}">
-        <div class="img-wrap">${img}${outOfStock?'<div class="oos-overlay">Habis Stok</div>':''}</div>
+        <div class="img-wrap">${img}${outOfStock?'<div class="oos-overlay">Habis Stok</div>':`<button type="button" class="quick-add-fab" data-product-id="${p.id}" aria-label="Tambah ke troli">+</button>`}</div>
         <div class="info">
           <div class="name">${escapeHtml(p.name)}</div>
           <div class="price-tag">${money(p.price)}</div>
@@ -655,6 +655,38 @@
         openProductDetail(id);
       });
     });
+    el.querySelectorAll('.quick-add-fab').forEach(btn=>{
+      btn.addEventListener('click', (e)=>{
+        e.stopPropagation();
+        quickAddToCart(btn.getAttribute('data-product-id'));
+      });
+    });
+  }
+
+  // Tambah 1 unit terus ke troli dari kad produk (butang "+" atas gambar) —
+  // tanpa buka panel detail. Produk yang ada variasi (saiz/warna dll) TAK boleh
+  // quick-add sebab kita tak tahu variasi mana nak pilih — buka panel detail
+  // sebaliknya supaya pelanggan pilih dulu.
+  async function quickAddToCart(id){
+    const p = findProduct(id);
+    if(!p) return;
+    const stockVal = p.stock!=null ? p.stock : 0;
+    if(stockVal<=0){ toast('Produk ini sedang habis stok'); return; }
+    if(p.variants && p.variants.length){
+      openProductDetail(id);
+      return;
+    }
+    const existing = state.cart.find(l=>l.productId===p.id && l.variantLabel==='none');
+    const existingQty = existing ? existing.qty : 0;
+    if(existingQty + 1 > stockVal){
+      toast(`Baki stok cuma ${stockVal}, anda dah ada ${existingQty} dalam troli`);
+      return;
+    }
+    if(existing){ existing.qty += 1; }
+    else { state.cart.push({productId:p.id, variantLabel:'none', qty:1}); }
+    await saveCart();
+    updateCartBadge();
+    toast('Ditambah ke troli');
   }
 
   /* ================= RENDER: PRODUCT DETAIL ================= */
@@ -1168,11 +1200,12 @@
   }
 
   function renderConfirm(order){
+    const isBillplz = order.paymentMethod === 'billplz';
     document.getElementById('confirmBody').innerHTML = `
       <div class="empty-state" style="padding:30px 10px;">
         <div class="icon">✅</div>
-        <div style="font-weight:700;font-size:16px;margin-bottom:6px;">Terima kasih, ${escapeHtml(order.customer.name)}!</div>
-        <div>Pesanan anda telah diterima dan sedang disemak.</div>
+        <div style="font-weight:700;font-size:16px;margin-bottom:6px;">${isBillplz ? 'Bayaran Berjaya!' : `Terima kasih, ${escapeHtml(order.customer.name)}!`}</div>
+        <div>${isBillplz ? `Terima kasih, ${escapeHtml(order.customer.name)}! Bayaran anda telah diterima.` : 'Pesanan anda telah diterima dan sedang disemak.'}</div>
       </div>
       <div class="summary-box">
         <div class="summary-row"><span>No. Pesanan</span><span style="font-family:var(--font-mono);font-size:12px;">${order.id}</span></div>
@@ -2264,13 +2297,26 @@
     renderCatalog();
     updateCartBadge();
     // Pelanggan baru diarah balik dari laman bayaran Billplz (?trackOrder=<id>
-    // dalam redirect_url) — terus buka panel "Jejak Pesanan" supaya nampak
-    // status terkini, bukan homepage kosong tanpa apa-apa maklum balas.
+    // dalam redirect_url) — terus buka panel "Bayaran Berjaya" (guna renderConfirm
+    // sedia ada) supaya nampak maklum balas terus, bukan homepage kosong.
     const trackOrderId = new URLSearchParams(window.location.search).get('trackOrder');
     if(trackOrderId){
       history.replaceState(null, '', window.location.pathname);
-      renderTrack(trackOrderId);
-      openPanel('trackPanel');
+      const paidOrder = await fetchOrder(trackOrderId);
+      if(paidOrder){
+        renderConfirm(paidOrder);
+        openPanel('confirmPanel');
+      } else {
+        renderTrack(trackOrderId);
+        openPanel('trackPanel');
+      }
+    }
+    // Butang "Login" dah dibuang dari nav bar bawah (customer tak perlu nampak) —
+    // admin akses panel ni terus guna URL ?admin=1 (cth: cktwebstore.com/?admin=1)
+    if(new URLSearchParams(window.location.search).get('admin')){
+      history.replaceState(null, '', window.location.pathname);
+      renderAdmin();
+      openPanel('adminPanel');
     }
     if(!supabaseConfigOk){
       const banner = document.createElement('div');
