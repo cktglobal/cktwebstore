@@ -920,7 +920,7 @@
       <div class="section-title">Kaedah Bayaran</div>
       <div class="payment-method-row">
         <label class="payment-method-option"><input type="radio" name="paymentMethod" id="pmManual" value="manual" checked> Upload Resit (QR/Transfer Bank)</label>
-        <label class="payment-method-option"><input type="radio" name="paymentMethod" id="pmDoku" value="doku"> Bayar Online Terus (FPX/Kad)</label>
+        <label class="payment-method-option"><input type="radio" name="paymentMethod" id="pmBillplz" value="billplz"> Bayar Online Terus (FPX/Kad)</label>
       </div>
 
       <div id="manualPaymentSection">
@@ -931,8 +931,8 @@
           <input type="file" accept="image/*,application/pdf" id="receiptInput">
         </div>
       </div>
-      <div id="dokuPaymentSection" style="display:none;">
-        <div class="hint">Selepas tekan "Teruskan ke Pembayaran", anda akan diarah ke laman pembayaran selamat DOKU (FPX/kad kredit-debit). Pesanan disahkan automatik selepas bayaran berjaya.</div>
+      <div id="billplzPaymentSection" style="display:none;">
+        <div class="hint">Selepas tekan "Teruskan ke Pembayaran", anda akan diarah ke laman pembayaran selamat Billplz (FPX/kad kredit-debit). Pesanan disahkan automatik selepas bayaran berjaya.</div>
       </div>
 
       <div style="margin-top:8px;"><button class="btn accent" id="submitOrderBtn" style="width:100%;padding:13px;font-size:15px;">Hantar Pesanan</button></div>
@@ -990,21 +990,21 @@
 
     // Receipt upload
     const pmManual = document.getElementById('pmManual');
-    const pmDoku = document.getElementById('pmDoku');
+    const pmBillplz = document.getElementById('pmBillplz');
     const manualSection = document.getElementById('manualPaymentSection');
-    const dokuSection = document.getElementById('dokuPaymentSection');
+    const billplzSection = document.getElementById('billplzPaymentSection');
     const submitBtnLabel = document.getElementById('submitOrderBtn');
     function updatePaymentMethodUI(){
-      const isDoku = pmDoku.checked;
-      manualSection.style.display = isDoku ? 'none' : 'block';
-      dokuSection.style.display = isDoku ? 'block' : 'none';
-      submitBtnLabel.textContent = isDoku ? 'Teruskan ke Pembayaran' : 'Hantar Pesanan';
-      document.getElementById('custEmailLabel').textContent = isDoku
+      const isBillplz = pmBillplz.checked;
+      manualSection.style.display = isBillplz ? 'none' : 'block';
+      billplzSection.style.display = isBillplz ? 'block' : 'none';
+      submitBtnLabel.textContent = isBillplz ? 'Teruskan ke Pembayaran' : 'Hantar Pesanan';
+      document.getElementById('custEmailLabel').textContent = isBillplz
         ? 'Email (wajib untuk bayaran online)'
         : 'Email (pilihan — untuk terima notifikasi pesanan)';
     }
     pmManual.addEventListener('change', updatePaymentMethodUI);
-    pmDoku.addEventListener('change', updatePaymentMethodUI);
+    pmBillplz.addEventListener('change', updatePaymentMethodUI);
 
     const receiptInput = document.getElementById('receiptInput');
     receiptInput.addEventListener('change', async (e)=>{
@@ -1051,13 +1051,13 @@
       }
       if(currentShipCost===null) updateShipping();
       if(currentShipCost===null){ toast('Poskod tidak sah'); return; }
-      const paymentMethod = pmDoku.checked ? 'doku' : 'manual';
+      const paymentMethod = pmBillplz.checked ? 'billplz' : 'manual';
       if(paymentMethod==='manual' && !checkoutReceiptData){
         toast('Sila upload resit bayaran');
         return;
       }
-      if(paymentMethod==='doku' && !email){
-        toast('Emel diperlukan untuk bayaran online (DOKU) — sila isi emel anda');
+      if(paymentMethod==='billplz' && !email){
+        toast('Emel diperlukan untuk bayaran online (Billplz) — sila isi emel anda');
         return;
       }
       const items = state.cart.map(line=>{
@@ -1084,7 +1084,7 @@
         shippingCost: currentShipCost,
         total: subtotal + currentShipCost,
         receiptImage: checkoutReceiptData,
-        status: paymentMethod==='doku' ? 'awaiting_payment' : 'pending',
+        status: paymentMethod==='billplz' ? 'awaiting_payment' : 'pending',
         trackingNumber: '',
         paymentMethod
       };
@@ -1097,12 +1097,12 @@
         toast(`Gagal hantar pesanan: ${errMsg} — sila cuba lagi`, 5000);
         return;
       }
-      // Untuk pesanan DOKU (bayar online), JANGAN tolak stok sekarang — pelanggan
-      // belum sahkan bayaran lagi (mungkin abandon di laman DOKU). Stok cuma
-      // ditolak selepas webhook doku-notification sahkan bayaran BERJAYA.
+      // Untuk pesanan Billplz (bayar online), JANGAN tolak stok sekarang — pelanggan
+      // belum sahkan bayaran lagi (mungkin abandon di laman Billplz). Stok cuma
+      // ditolak selepas webhook billplz-notification sahkan bayaran BERJAYA.
       // Untuk pesanan manual (upload resit), stok ditolak terus macam biasa
       // sebab upload resit dah jadi tanda niat bayaran yang lebih kukuh.
-      if(paymentMethod !== 'doku'){
+      if(paymentMethod !== 'billplz'){
         for(const line of state.cart){
           const p = findProduct(line.productId);
           if(!p) continue;
@@ -1121,10 +1121,10 @@
       state.lastOrder = order;
       renderCatalog();
 
-      if(paymentMethod === 'doku'){
-        submitBtn.textContent = 'Menyambung ke DOKU...';
+      if(paymentMethod === 'billplz'){
+        submitBtn.textContent = 'Menyambung ke Billplz...';
         try{
-          const res = await fetch(window.DOKU_CREATE_PAYMENT_URL, {
+          const res = await fetch(window.BILLPLZ_CREATE_PAYMENT_URL, {
             method: 'POST',
             headers: {
               'Content-Type':'application/json',
@@ -1144,11 +1144,11 @@
             window.location.href = data.paymentUrl;
           } else {
             submitBtn.disabled = false; submitBtn.textContent = 'Teruskan ke Pembayaran';
-            toast(`Gagal sambung ke DOKU: ${data.error||'ralat tidak diketahui'} — pesanan anda tetap disimpan, admin akan hubungi anda`, 5000);
+            toast(`Gagal sambung ke Billplz: ${data.error||'ralat tidak diketahui'} — pesanan anda tetap disimpan, admin akan hubungi anda`, 5000);
           }
         } catch(err){
           submitBtn.disabled = false; submitBtn.textContent = 'Teruskan ke Pembayaran';
-          toast('Gagal sambung ke DOKU — semak sambungan internet & cuba lagi', 4000);
+          toast('Gagal sambung ke Billplz — semak sambungan internet & cuba lagi', 4000);
         }
         return;
       }
