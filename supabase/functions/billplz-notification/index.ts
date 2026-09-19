@@ -9,6 +9,12 @@
 // (dihantar automatik oleh billplz-create-payment setiap kali cipta bill,
 // jadi tak perlu set manual dalam Billplz Dashboard).
 //
+// Selepas bayaran disahkan, function ni JUGA terus hantar notifikasi Telegram
+// (guna Bot Token/Chat ID yang admin dah set di panel Tetapan kedai, jadual
+// "settings") — ini SATU-SATUNYA notifikasi admin terima untuk pesanan Billplz
+// (app.js sengaja tak notify semasa customer tekan "Teruskan ke Pembayaran",
+// sebab belum tentu jadi bayar).
+//
 // Secrets yang perlu di-set (Supabase Dashboard > Edge Functions >
 // billplz-notification > Secrets):
 //   BILLPLZ_X_SIGNATURE_KEY -> "X Signature Key" dari Billplz Dashboard
@@ -44,6 +50,69 @@ async function hmacSha256Hex(text: string, secret: string): Promise<string> {
   );
   const sigBuffer = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text));
   return toHex(new Uint8Array(sigBuffer));
+}
+
+function escapeHtml(text: string): string {
+  return String(text ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function money(amount: number): string {
+  return `RM${Number(amount || 0).toFixed(2)}`;
+}
+
+async function notifyTelegramPaid(
+  supabaseUrl: string,
+  supabaseServiceKey: string,
+  order: { id: string; customer?: Record<string, unknown>; items?: Array<Record<string, unknown>>; total?: number; shipping_cost?: number },
+) {
+  try {
+    const settingsRes = await fetch(
+      `${supabaseUrl}/rest/v1/settings?id=eq.1&select=telegram_bot_token,telegram_chat_id`,
+      {
+        headers: {
+          "apikey": supabaseServiceKey,
+          "Authorization": `Bearer ${supabaseServiceKey}`,
+        },
+      },
+    );
+    const settingsRows = await settingsRes.json();
+    const token = settingsRows?.[0]?.telegram_bot_token;
+    const chatId = settingsRows?.[0]?.telegram_chat_id;
+    if (!token || !chatId) return; // Telegram belum ditetapkan oleh admin — senyap sahaja
+
+    const customer = order.customer || {};
+    const items = order.items || [];
+    const itemLines = items
+      .map((it) => `• ${it.qty}x ${escapeHtml(String(it.name))}${it.variantLabel && it.variantLabel !== "none" ? ` (${escapeHtml(String(it.variantLabel))})` : ""} — ${money(Number(it.price || 0) * Number(it.qty || 0))}`)
+      .join("\n");
+    const message = [
+      `💳 <b>Bayaran Online Berjaya (Billplz)</b>`,
+      ``,
+      `No. Pesanan: ${order.id}`,
+      `Nama: ${escapeHtml(String(customer.name || ""))}`,
+      `Telefon: ${escapeHtml(String(customer.phone || ""))}`,
+      `Alamat: ${escapeHtml(String(customer.address || ""))}, ${escapeHtml(String(customer.postcode || ""))}`,
+      ``,
+      `<b>Item:</b>`,
+      itemLines,
+      ``,
+      `Penghantaran: ${money(Number(order.shipping_cost || 0))}`,
+      `<b>Jumlah: ${money(Number(order.total || 0))}</b>`,
+    ].join("\n");
+
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: "HTML" }),
+    });
+    const data = await res.json();
+    if (!data.ok) console.error("billplz-notification: Telegram send error:", data.description);
+  } catch (err) {
+    console.error("billplz-notification: Telegram fetch error:", err);
+  }
 }
 
 Deno.serve(async (req) => {
@@ -93,11 +162,12 @@ Deno.serve(async (req) => {
       const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
       const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-      // Ambil pesanan dulu — perlukan senarai item (untuk tolak stok) dan status
-      // semasa (untuk elak tolak stok DUA KALI kalau Billplz hantar notifikasi
-      // sama lebih dari sekali, sesuatu yang biasa berlaku pada webhook gateway)
+      // Ambil pesanan dulu — perlukan butiran penuh untuk tolak stok & bina
+      // mesej Telegram, dan status semasa untuk elak tolak stok/notify DUA KALI
+      // kalau Billplz hantar notifikasi sama lebih dari sekali (biasa berlaku
+      // pada webhook gateway)
       const getRes = await fetch(
-        `${supabaseUrl}/rest/v1/orders?id=eq.${orderId}&select=status,items`,
+        `${supabaseUrl}/rest/v1/orders?id=eq.${orderId}&select=status,items,customer,total,shipping_cost`,
         {
           headers: {
             "apikey": supabaseServiceKey,
@@ -107,8 +177,9 @@ Deno.serve(async (req) => {
       );
       const rows = await getRes.json();
       const existingOrder = rows?.[0];
+      const isFirstTimePaid = existingOrder && existingOrder.status !== "paid";
 
-      if (existingOrder && existingOrder.status !== "paid") {
+      if (isFirstTimePaid) {
         // Tolak stok untuk setiap item — cuma sekarang (bayaran online DAH
         // disahkan berjaya), bukan semasa checkout tadi seperti pesanan manual
         const items = existingOrder.items || [];
@@ -141,6 +212,8 @@ Deno.serve(async (req) => {
       });
       if (!updateRes.ok) {
         console.error("billplz-notification: gagal kemaskini pesanan", await updateRes.text());
+      } else if (isFirstTimePaid) {
+        await notifyTelegramPaid(supabaseUrl, supabaseServiceKey, { id: orderId, ...existingOrder });
       }
     }
     // paid=false (state due/failed) — tak buat apa-apa, biar status pesanan kekal

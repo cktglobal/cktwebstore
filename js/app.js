@@ -1113,7 +1113,15 @@
         }
       }
       saveCustomerProfile({name, phone, address, city, postcode, email});
-      sendTelegramNotification(orderTelegramMessage(order));
+      // Untuk pesanan Billplz, JANGAN notify sekarang — pelanggan baru je tekan
+      // "Teruskan ke Pembayaran", belum tentu jadi bayar (mungkin batal di laman
+      // Billplz). Notify admin cuma lepas bayaran DISAHKAN — dihantar terus oleh
+      // Edge Function billplz-notification bila webhook diterima dari Billplz.
+      // Untuk pesanan manual (upload resit), notify terus macam biasa sebab
+      // upload resit dah jadi tanda niat bayaran yang kukuh.
+      if(paymentMethod !== 'billplz'){
+        sendTelegramNotification(orderTelegramMessage(order));
+      }
       addToMyOrders(order);
       state.cart = [];
       await saveCart();
@@ -2255,6 +2263,15 @@
     renderPromoVideo();
     renderCatalog();
     updateCartBadge();
+    // Pelanggan baru diarah balik dari laman bayaran Billplz (?trackOrder=<id>
+    // dalam redirect_url) — terus buka panel "Jejak Pesanan" supaya nampak
+    // status terkini, bukan homepage kosong tanpa apa-apa maklum balas.
+    const trackOrderId = new URLSearchParams(window.location.search).get('trackOrder');
+    if(trackOrderId){
+      history.replaceState(null, '', window.location.pathname);
+      renderTrack(trackOrderId);
+      openPanel('trackPanel');
+    }
     if(!supabaseConfigOk){
       const banner = document.createElement('div');
       banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:200;background:#C1443C;color:#fff;padding:10px 14px;font-size:12.5px;text-align:center;';

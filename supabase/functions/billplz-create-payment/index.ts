@@ -66,7 +66,9 @@ Deno.serve(async (req) => {
     form.set("callback_url", `${supabaseUrl}/functions/v1/billplz-notification`);
     // Bawa pelanggan balik ke kedai automatik lepas bayaran selesai (berjaya
     // ATAU gagal) — tanpa ni pelanggan "terperangkap" di laman result Billplz.
-    form.set("redirect_url", "https://cktwebstore.com/");
+    // Sertakan orderId (?trackOrder=) supaya app.js boleh terus buka panel
+    // "Jejak Pesanan" (papar status "Bayaran Disahkan" dsb.) bukan homepage kosong.
+    form.set("redirect_url", `https://cktwebstore.com/?trackOrder=${encodeURIComponent(orderId)}`);
 
     const authHeader = "Basic " + btoa(`${BILLPLZ_API_KEY}:`);
 
