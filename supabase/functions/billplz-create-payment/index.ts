@@ -57,9 +57,12 @@ Deno.serve(async (req) => {
     if (customerPhone) form.set("mobile", customerPhone);
     form.set("amount", String(billplzAmountCents));
     form.set("description", `Pesanan ${orderId}`.slice(0, 200));
-    // Billplz webhook (callback) tak bawa balik orderId kita secara automatik —
-    // simpan dalam reference_1 supaya boleh padankan balik pesanan bila
-    // notifikasi bayaran diterima kat billplz-notification.
+    // reference_1 hanya untuk paparan admin dalam Billplz Dashboard (senang
+    // rujuk No. Pesanan bila tengok senarai Bills) — TIDAK boleh dipakai untuk
+    // padankan balik order semasa webhook, sebab Billplz Callback (POST server-
+    // ke-server ke billplz-notification) tak bawa balik reference_1 langsung.
+    // Padanan sebenar guna billplz_bill_id (disimpan bawah, = billplzData.id)
+    // dipadankan dengan field "id" yang Billplz hantar dalam Callback.
     form.set("reference_1_label", "Order ID");
     form.set("reference_1", orderId);
     // Server-to-server webhook — Billplz panggil ni bila status bill berubah

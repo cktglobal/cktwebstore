@@ -182,12 +182,16 @@ Deno.serve(async (req) => {
     console.log(`billplz-notification: signature sah (format: ${matchedFormat})`);
 
     // 2. Signature sah — proses notifikasi
-    const orderId = params.get("reference_1") ?? "";
+    // NOTA: webhook Billplz sebenar TIDAK bawa balik reference_1/reference_2
+    // (medan tu hanya wujud pada Redirect browser, bukan Callback server-to-
+    // server ni) — sebab tu kita padankan order guna billplz_bill_id yang kita
+    // sendiri simpan masa cipta bayaran (billplz-create-payment), bukan
+    // reference_1.
     const isPaid = params.get("paid") === "true";
     const billId = params.get("id") ?? null;
 
-    if (!orderId) {
-      return new Response(JSON.stringify({ ok: false, error: "reference_1 (orderId) tiada dalam notifikasi" }), {
+    if (!billId) {
+      return new Response(JSON.stringify({ ok: false, error: "id (bill id) tiada dalam notifikasi" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -202,7 +206,7 @@ Deno.serve(async (req) => {
       // kalau Billplz hantar notifikasi sama lebih dari sekali (biasa berlaku
       // pada webhook gateway)
       const getRes = await fetch(
-        `${supabaseUrl}/rest/v1/orders?id=eq.${orderId}&select=status,items,customer,total,shipping_cost`,
+        `${supabaseUrl}/rest/v1/orders?billplz_bill_id=eq.${billId}&select=id,status,items,customer,total,shipping_cost`,
         {
           headers: {
             "apikey": supabaseServiceKey,
@@ -212,7 +216,16 @@ Deno.serve(async (req) => {
       );
       const rows = await getRes.json();
       const existingOrder = rows?.[0];
-      const isFirstTimePaid = existingOrder && existingOrder.status !== "paid";
+
+      if (!existingOrder) {
+        console.error("billplz-notification: tiada order dengan billplz_bill_id =", billId);
+        return new Response(JSON.stringify({ ok: false, error: "Order tidak dijumpai untuk bill ini" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      const orderId = existingOrder.id;
+      const isFirstTimePaid = existingOrder.status !== "paid";
 
       if (isFirstTimePaid) {
         // Tolak stok untuk setiap item — cuma sekarang (bayaran online DAH
