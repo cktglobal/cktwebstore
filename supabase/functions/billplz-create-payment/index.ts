@@ -35,20 +35,46 @@ Deno.serve(async (req) => {
 
   try {
     const payload = await req.json();
-    const { orderId, amount, customerName, customerEmail, customerPhone } = payload;
+    const orderId = typeof payload?.orderId === "string" ? payload.orderId : "";
 
-    if (!orderId || !amount) {
+    if (!orderId) {
       return new Response(
-        JSON.stringify({ ok: false, error: "Medan orderId atau amount tiada" }),
+        JSON.stringify({ ok: false, error: "Medan orderId tiada" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+    // KESELAMATAN: jumlah & butiran pelanggan diambil dari DATABASE, bukan
+    // dari browser. Sebelum ni browser hantar "amount" sendiri — sesiapa
+    // boleh tukar jadi RM0.01 dan pesanan tetap ditanda "paid" oleh webhook.
+    const orderRes = await fetch(
+      `${supabaseUrl}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}&select=id,total,status,payment_method,customer`,
+      { headers: { "apikey": supabaseServiceKey, "Authorization": `Bearer ${supabaseServiceKey}` } },
+    );
+    const orderRows = await orderRes.json();
+    const order = Array.isArray(orderRows) ? orderRows[0] : null;
+    if (!order) {
+      return new Response(
+        JSON.stringify({ ok: false, error: "Pesanan tidak dijumpai" }),
+        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+    if (order.payment_method !== "billplz" || order.status !== "awaiting_payment") {
+      return new Response(
+        JSON.stringify({ ok: false, error: "Pesanan ini tidak menunggu bayaran online" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+    const customerName = order.customer?.name;
+    const customerEmail = order.customer?.email;
+    const customerPhone = order.customer?.phone;
+
     // Billplz nak amount dalam SEN (integer), bukan Ringgit dengan titik
     // perpuluhan — cth RM10.50 kena hantar sebagai 1050.
-    const billplzAmountCents = Math.round(Number(amount) * 100);
-
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const billplzAmountCents = Math.round(Number(order.total) * 100);
 
     const form = new URLSearchParams();
     form.set("collection_id", BILLPLZ_COLLECTION_ID);
@@ -98,8 +124,7 @@ Deno.serve(async (req) => {
     }
 
     // Simpan bill id & payment url ke rekod pesanan supaya boleh rujuk balik kalau perlu
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    await fetch(`${supabaseUrl}/rest/v1/orders?id=eq.${orderId}`, {
+    await fetch(`${supabaseUrl}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
@@ -121,7 +146,7 @@ Deno.serve(async (req) => {
   } catch (err) {
     console.error("billplz-create-payment error:", err);
     return new Response(
-      JSON.stringify({ ok: false, error: String(err) }),
+      JSON.stringify({ ok: false, error: "Ralat server" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   }

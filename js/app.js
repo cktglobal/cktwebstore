@@ -13,6 +13,52 @@
     }
   }catch(e){ console.error('Supabase init failed', e); }
 
+  /* ================= STORE API (Edge Function store-api) =================
+     Semua operasi admin (produk, tetapan, pesanan, waybill, Telegram) melalui
+     server — PIN disemak di server & server pulangkan token sesi admin yang
+     disimpan dalam sessionStorage (hilang bila tab/browser ditutup). */
+  const ADMIN_TOKEN_KEY = 'cktglobal_admin_token';
+  function getAdminToken(){
+    try{ return sessionStorage.getItem(ADMIN_TOKEN_KEY) || ''; }catch(e){ return ''; }
+  }
+  function setAdminToken(token){
+    try{
+      if(token) sessionStorage.setItem(ADMIN_TOKEN_KEY, token);
+      else sessionStorage.removeItem(ADMIN_TOKEN_KEY);
+    }catch(e){}
+  }
+  async function storeApi(action, payload){
+    if(!window.STORE_API_URL) return {ok:false, error:'STORE_API_URL belum ditetapkan dalam js/config.js'};
+    try{
+      const res = await fetch(window.STORE_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type':'application/json',
+          'Authorization': 'Bearer ' + window.SUPABASE_ANON_KEY,
+          'apikey': window.SUPABASE_ANON_KEY,
+          'x-admin-token': getAdminToken()
+        },
+        body: JSON.stringify(Object.assign({action}, payload || {}))
+      });
+      let data;
+      try{ data = await res.json(); }
+      catch(e){ data = {ok:false, error:'Respons server tidak sah (' + res.status + ')'}; }
+      if(res.status===401 && action!=='login') handleAdminSessionExpired();
+      return data;
+    }catch(err){
+      console.error('store-api error:', err);
+      return {ok:false, error:'Gagal sambung ke server — semak sambungan internet'};
+    }
+  }
+  function handleAdminSessionExpired(){
+    setAdminToken('');
+    if(state.adminUnlocked){
+      state.adminUnlocked = false;
+      toast('Sesi admin tamat — sila login semula', 3000);
+      renderAdmin();
+    }
+  }
+
   /* ================= STATE ================= */
   const state = {
     products: [],
@@ -20,7 +66,6 @@
       storeName: "Kedai Saya",
       storeLogo: STORE_LOGO,
       qrImage: null,
-      adminPin: "1234",
       promoVideoType: 'none',
       promoVideo: null,
       promoVideoUrl: '',
@@ -93,41 +138,6 @@
     if(!num){ toast('Nombor telefon pelanggan tidak sah'); return; }
     window.open(`https://wa.me/${num}?text=${encodeURIComponent(message)}`, '_blank');
   }
-  async function sendTelegramNotification(message){
-    const token = state.settings.telegramBotToken;
-    const chatId = state.settings.telegramChatId;
-    if(!token || !chatId) return {ok:false, error:'Telegram belum ditetapkan'};
-    try{
-      const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({chat_id: chatId, text: message, parse_mode: 'HTML'})
-      });
-      const data = await res.json();
-      if(!data.ok) console.error('Telegram send error:', data.description);
-      return {ok: !!data.ok, error: data.description};
-    }catch(err){
-      console.error('Telegram fetch error:', err);
-      return {ok:false, error: String(err)};
-    }
-  }
-  function orderTelegramMessage(o){
-    const lines = o.items.map(it=>`• ${it.qty}x ${escapeHtml(it.name)}${it.variantLabel&&it.variantLabel!=='none'?' ('+escapeHtml(it.variantLabel)+')':''} — ${money(it.price*it.qty)}`).join('\n');
-    return [
-      `🛒 <b>Pesanan Baru Diterima</b>`,
-      ``,
-      `No. Pesanan: ${o.id}`,
-      `Nama: ${escapeHtml(o.customer.name)}`,
-      `Telefon: ${escapeHtml(o.customer.phone)}`,
-      `Alamat: ${escapeHtml(o.customer.address)}, ${escapeHtml(o.customer.postcode)} (${ZONE_LABELS[o.customer.zone]})`,
-      ``,
-      `<b>Item:</b>`,
-      lines,
-      ``,
-      `Penghantaran: ${money(o.shippingCost)}`,
-      `<b>Jumlah: ${money(o.total)}</b>`
-    ].join('\n');
-  }
   function orderEmailBody(o){
     const lines = o.items.map(it=>`- ${it.qty}x ${it.name}${it.variantLabel&&it.variantLabel!=='none'?' ('+it.variantLabel+')':''} — ${money(it.price*it.qty)}`).join('\n');
     return [
@@ -146,7 +156,7 @@
   }
   // Mesej WhatsApp terus untuk pelanggan — guna *bold* gaya WhatsApp (bukan HTML),
   // dan ditulis macam mesej terus kepada pelanggan (bukan laporan dalaman macam
-  // orderEmailBody/orderTelegramMessage yang untuk rujukan admin).
+  // orderEmailBody yang untuk rujukan admin).
   function orderWhatsAppMessage(o){
     const lines = o.items.map(it=>`• ${it.qty}x ${it.name}${it.variantLabel&&it.variantLabel!=='none'?' ('+it.variantLabel+')':''} — ${money(it.price*it.qty)}`).join('\n');
     return [
@@ -173,10 +183,36 @@
     return {
       id:row.id, createdAt:row.created_at, customer:row.customer, items:row.items,
       weight:Number(row.weight), subtotal:Number(row.subtotal), shippingCost:Number(row.shipping_cost),
-      total:Number(row.total), receiptImage:row.receipt_image, status:row.status, trackingNumber:row.tracking_number||'',
+      total:Number(row.total), receiptImage:row.receipt_image||null, status:row.status, trackingNumber:row.tracking_number||'',
       completedAt:row.completed_at||null,
-      waybillPdfUrl:row.waybill_pdf_url||null
+      waybillPdfUrl:row.waybill_pdf_url||null,
+      paymentMethod:row.payment_method||'manual'
     };
+  }
+  // Lajur tetapan yang BOLEH dibaca awam (lihat supabase/migration-keselamatan.sql).
+  // Token Telegram, maklumat sender & hash PIN cuma dimuatkan selepas admin login.
+  const PUBLIC_SETTINGS_COLUMNS = 'store_name,store_logo,qr_image,shipping_rates,promo_image,promo_images,promo_video_type,promo_video,promo_video_url';
+  function applyAdminSettingsRow(row){
+    if(!row) return;
+    Object.assign(state.settings, {
+      telegramBotToken: row.telegram_bot_token || '',
+      telegramChatId: row.telegram_chat_id || '',
+      senderName: row.sender_name || '',
+      senderPhone: row.sender_phone || '',
+      senderEmail: row.sender_email || '',
+      senderAddress1: row.sender_address1 || '',
+      senderCity: row.sender_city || '',
+      senderState: row.sender_state || '',
+      senderPostcode: row.sender_postcode || ''
+    });
+  }
+  async function loadAdminSettings(){
+    const res = await storeApi('get_settings');
+    if(res.ok) applyAdminSettingsRow(res.settings);
+    return res;
+  }
+  function clearAdminSettings(){
+    applyAdminSettingsRow({});
   }
 
   function applyBrandingToHeader(storeName, storeLogo){
@@ -205,16 +241,15 @@
       return;
     }
     const [{data:settingsRow, error:settingsErr}, {data:productRows, error:productsErr}] = await Promise.all([
-      supabaseClient.from('settings').select('*').eq('id',1).maybeSingle(),
+      supabaseClient.from('settings').select(PUBLIC_SETTINGS_COLUMNS).eq('id',1).maybeSingle(),
       supabaseClient.from('products').select('*').order('created_at',{ascending:true})
     ]);
     if(settingsErr) console.error(settingsErr);
     if(settingsRow){
-      state.settings = {
+      Object.assign(state.settings, {
         storeName: settingsRow.store_name || state.settings.storeName,
         storeLogo: settingsRow.store_logo || state.settings.storeLogo,
         qrImage: settingsRow.qr_image || null,
-        adminPin: settingsRow.admin_pin || state.settings.adminPin,
         shippingRates: settingsRow.shipping_rates || state.settings.shippingRates,
         promoVideoType: settingsRow.promo_video_type || 'none',
         promoVideo: settingsRow.promo_video || null,
@@ -225,17 +260,8 @@
         // supaya banner sedia ada tak hilang selepas kemaskini ni.
         promoImages: (settingsRow.promo_images && settingsRow.promo_images.length)
           ? settingsRow.promo_images
-          : (settingsRow.promo_image ? [settingsRow.promo_image] : []),
-        telegramBotToken: settingsRow.telegram_bot_token || '',
-        telegramChatId: settingsRow.telegram_chat_id || '',
-        senderName: settingsRow.sender_name || '',
-        senderPhone: settingsRow.sender_phone || '',
-        senderEmail: settingsRow.sender_email || '',
-        senderAddress1: settingsRow.sender_address1 || '',
-        senderCity: settingsRow.sender_city || '',
-        senderState: settingsRow.sender_state || '',
-        senderPostcode: settingsRow.sender_postcode || ''
-      };
+          : (settingsRow.promo_image ? [settingsRow.promo_image] : [])
+      });
     }
     if(productsErr) console.error(productsErr);
     if(productRows) state.products = productRows.map(rowToProduct);
@@ -285,99 +311,74 @@
     }catch(e){ return ''; }
   }
 
-  async function saveSettings(){
-    if(!supabaseConfigOk) return {ok:false, error:'Supabase belum disambungkan'};
-    const {error} = await supabaseClient.from('settings').update({
-      store_name: state.settings.storeName,
-      store_logo: state.settings.storeLogo,
-      qr_image: state.settings.qrImage,
-      admin_pin: state.settings.adminPin,
-      shipping_rates: state.settings.shippingRates,
-      promo_video_type: state.settings.promoVideoType,
-      promo_video: state.settings.promoVideo,
-      promo_video_url: state.settings.promoVideoUrl,
-      promo_image: (state.settings.promoImages && state.settings.promoImages[0]) || state.settings.promoImage,
-      promo_images: state.settings.promoImages || [],
-      telegram_bot_token: state.settings.telegramBotToken,
-      telegram_chat_id: state.settings.telegramChatId,
-      sender_name: state.settings.senderName,
-      sender_phone: state.settings.senderPhone,
-      sender_email: state.settings.senderEmail,
-      sender_address1: state.settings.senderAddress1,
-      sender_city: state.settings.senderCity,
-      sender_state: state.settings.senderState,
-      sender_postcode: state.settings.senderPostcode
-    }).eq('id',1);
-    if(error) console.error('Settings save error:', error.message, '| details:', error.details, '| hint:', error.hint, '| code:', error.code);
-    return {ok:!error, error};
+  async function saveSettings(newPin){
+    const s = state.settings;
+    const result = await storeApi('save_settings', {
+      settings: {
+        storeName: s.storeName,
+        storeLogo: s.storeLogo,
+        qrImage: s.qrImage,
+        shippingRates: s.shippingRates,
+        promoVideoType: s.promoVideoType,
+        promoVideo: s.promoVideo,
+        promoVideoUrl: s.promoVideoUrl,
+        promoImages: s.promoImages || [],
+        telegramBotToken: s.telegramBotToken,
+        telegramChatId: s.telegramChatId,
+        senderName: s.senderName,
+        senderPhone: s.senderPhone,
+        senderEmail: s.senderEmail,
+        senderAddress1: s.senderAddress1,
+        senderCity: s.senderCity,
+        senderState: s.senderState,
+        senderPostcode: s.senderPostcode
+      },
+      newPin: newPin || ''
+    });
+    if(!result.ok) console.error('Settings save error:', result.error);
+    return result;
   }
 
-  async function insertProductRow(p){
-    if(!supabaseConfigOk) return {ok:false, error:'Supabase belum disambungkan'};
-    const {error} = await supabaseClient.from('products').insert({
-      id:p.id, name:p.name, description:p.description, price:p.price, weight:p.weight, images:p.images, variants:p.variants, category:p.category, stock:p.stock, testimonials:p.testimonials
+  async function saveProductRow(p, isNew){
+    const result = await storeApi('product_save', {
+      isNew: !!isNew,
+      product: {id:p.id, name:p.name, description:p.description, price:p.price, weight:p.weight, images:p.images, variants:p.variants, category:p.category, stock:p.stock, testimonials:p.testimonials}
     });
-    if(error) console.error('Insert product error:', error.message, '| details:', error.details, '| hint:', error.hint, '| code:', error.code);
-    return {ok:!error, error};
-  }
-  async function updateProductRow(p){
-    if(!supabaseConfigOk) return {ok:false, error:'Supabase belum disambungkan'};
-    const {error} = await supabaseClient.from('products').update({
-      name:p.name, description:p.description, price:p.price, weight:p.weight, images:p.images, variants:p.variants, category:p.category, stock:p.stock, testimonials:p.testimonials
-    }).eq('id', p.id);
-    if(error) console.error('Update product error:', error.message, '| details:', error.details, '| hint:', error.hint, '| code:', error.code);
-    return {ok:!error, error};
+    if(!result.ok) console.error('Save product error:', result.error);
+    return result;
   }
   async function deleteProductRow(id){
-    if(!supabaseConfigOk) return {ok:false, error:'Supabase belum disambungkan'};
-    const {data, error} = await supabaseClient.from('products').delete().eq('id', id).select();
-    if(error){
-      console.error('Delete product error:', error.message, '| details:', error.details, '| hint:', error.hint, '| code:', error.code);
-      return {ok:false, error};
-    }
-    if(!data || data.length===0){
-      const noRowError = 'Tiada baris dipadam — kemungkinan disekat oleh polisi RLS (semak polisi "delete" untuk jadual products di Supabase)';
-      console.error('Delete product error:', noRowError);
-      return {ok:false, error:noRowError};
-    }
-    return {ok:true, error:null};
-  }
-  // Kurangkan stok di server (guna fungsi DB "decrement_stock" supaya proses tolak
-  // stok berlaku terus di Supabase — elak masalah 2 pelanggan checkout serentak
-  // menyebabkan stok tersimpan salah akibat baca-lepas-tulis dari browser.
-  async function decrementStockRow(productId, qty){
-    if(!supabaseConfigOk) return {ok:false, error:'Supabase belum disambungkan'};
-    const {data, error} = await supabaseClient.rpc('decrement_stock', {p_id: productId, qty});
-    if(error) console.error('Decrement stock error:', error.message, '| details:', error.details, '| hint:', error.hint, '| code:', error.code);
-    return {ok:!error, error, newStock: data};
+    const result = await storeApi('product_delete', {id});
+    if(!result.ok) console.error('Delete product error:', result.error);
+    return result;
   }
 
-  async function saveOrder(order){
+  // Pesanan dicipta di SERVER (fungsi DB place_order) — harga, berat, kos
+  // penghantaran & jumlah dikira semula di sana, dan stok ditolak secara
+  // atomic untuk pesanan manual. Pulangkan pesanan yang disimpan.
+  async function placeOrder(customer, cartLines, paymentMethod, receiptImage){
     if(!supabaseConfigOk) return {ok:false, error:'Supabase belum disambungkan'};
-    const row = {
-      id: order.id,
-      created_at: order.createdAt,
-      customer: order.customer,
-      items: order.items,
-      weight: order.weight,
-      subtotal: order.subtotal,
-      shipping_cost: order.shippingCost,
-      total: order.total,
-      receipt_image: order.receiptImage,
-      status: order.status,
-      tracking_number: order.trackingNumber || '',
-      completed_at: order.completedAt || null,
-      waybill_pdf_url: order.waybillPdfUrl || null,
-      payment_method: order.paymentMethod || 'manual'
-    };
-    const {error} = await supabaseClient.from('orders').upsert(row);
-    if(error) console.error('Order save error:', error.message, '| details:', error.details, '| hint:', error.hint, '| code:', error.code);
-    return {ok:!error, error};
+    const {data, error} = await supabaseClient.rpc('place_order', {
+      p_customer: customer,
+      p_items: cartLines.map(l=>({productId:l.productId, variantLabel:l.variantLabel, qty:l.qty})),
+      p_payment_method: paymentMethod,
+      p_receipt_image: receiptImage || null
+    });
+    if(error){
+      console.error('Place order error:', error.message, '| details:', error.details, '| hint:', error.hint, '| code:', error.code);
+      return {ok:false, error:error.message};
+    }
+    return {ok:true, order: rowToOrder(data)};
+  }
+  async function updateOrderRow(id, patch){
+    const result = await storeApi('order_update', Object.assign({id}, patch));
+    if(!result.ok) console.error('Order update error:', result.error);
+    return result;
   }
   async function fetchOrder(id){
     if(state.ordersCache[id]) return state.ordersCache[id];
     if(!supabaseConfigOk) return null;
-    const {data, error} = await supabaseClient.from('orders').select('*').eq('id', id).maybeSingle();
+    const {data, error} = await supabaseClient.rpc('track_order', {p_id: id});
     if(error){ console.error('Fetch order error:', error.message, '| details:', error.details, '| hint:', error.hint, '| code:', error.code); return null; }
     if(!data) return null;
     const o = rowToOrder(data);
@@ -385,40 +386,27 @@
     return o;
   }
   async function fetchAllOrders(){
-    if(!supabaseConfigOk) return [];
-    const {data, error} = await supabaseClient.from('orders').select('*').order('created_at',{ascending:false});
-    if(error || !data) return [];
-    return data.map(rowToOrder);
+    const result = await storeApi('orders_list');
+    if(!result.ok || !result.orders){
+      if(result.error) toast('Gagal muat pesanan: ' + result.error, 4000);
+      return [];
+    }
+    return result.orders.map(rowToOrder);
   }
   async function deleteOrderRow(id){
-    if(!supabaseConfigOk) return {ok:false, error:'Supabase belum disambungkan'};
-    // .select() di sini penting: ia buat Supabase pulangkan baris yang betul-betul
-    // dipadam. Kalau RLS/polisi sekat operasi ni secara senyap, delete() biasa akan
-    // "berjaya" walaupun 0 baris terjejas — dengan .select() kita boleh kesan kes tu
-    // dan tunjuk error yang jelas, bukan biarkan pesanan nampak macam dah terpadam.
-    const {data, error} = await supabaseClient.from('orders').delete().eq('id', id).select();
-    if(error){
-      console.error('Delete order error:', error.message, '| details:', error.details, '| hint:', error.hint, '| code:', error.code);
-      return {ok:false, error};
-    }
-    if(!data || data.length===0){
-      const noRowError = 'Tiada baris dipadam — kemungkinan disekat oleh polisi RLS (semak polisi "delete" untuk jadual orders di Supabase)';
-      console.error('Delete order error:', noRowError);
-      return {ok:false, error:noRowError};
-    }
-    return {ok:true, error:null};
+    const result = await storeApi('order_delete', {id});
+    if(!result.ok) console.error('Delete order error:', result.error);
+    return result;
   }
   async function fetchOrdersByPhone(phone){
     if(!supabaseConfigOk) return [];
-    const digits = phone.replace(/\D/g,'');
-    const {data, error} = await supabaseClient.from('orders').select('*').eq('customer->>phoneDigits', digits).order('created_at',{ascending:false});
+    const {data, error} = await supabaseClient.rpc('track_orders_by_phone', {p_phone: phone});
     if(error){ console.error('Fetch orders by phone error:', error.message, '| details:', error.details, '| hint:', error.hint, '| code:', error.code); return []; }
     if(!data) return [];
     return data.map(rowToOrder);
   }
 
   /* ================= UTIL ================= */
-  function uid(prefix){ return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,7); }
   function money(n){ return 'RM' + (Math.round(n*100)/100).toFixed(2); }
   function toast(msg, duration){
     const t = document.getElementById('toast');
@@ -1092,10 +1080,6 @@
         toast('Emel diperlukan untuk bayaran online (Billplz) — sila isi emel anda');
         return;
       }
-      const items = state.cart.map(line=>{
-        const p = findProduct(line.productId);
-        return {productId:line.productId, name:p?p.name:'—', variantLabel:line.variantLabel, qty:line.qty, price:p?p.price:0};
-      });
       // Semak sekali lagi baki stok sebelum hantar — elak overselling kalau troli
       // dibiar lama terbuka dan stok dah berubah (contoh admin dah kemaskini/produk lain beli habiskannya)
       for(const line of state.cart){
@@ -1106,42 +1090,23 @@
           return;
         }
       }
-      const order = {
-        id: uid('order'),
-        createdAt: new Date().toISOString(),
-        customer: {name, phone, phoneDigits: phone.replace(/\D/g,''), address, city, postcode, zone, email},
-        items,
-        weight,
-        subtotal,
-        shippingCost: currentShipCost,
-        total: subtotal + currentShipCost,
-        receiptImage: checkoutReceiptData,
-        status: paymentMethod==='billplz' ? 'awaiting_payment' : 'pending',
-        trackingNumber: '',
-        paymentMethod
-      };
       const submitBtn = document.getElementById('submitOrderBtn');
       submitBtn.disabled = true; submitBtn.textContent = 'Menghantar...';
-      const result = await saveOrder(order);
+      // Harga, berat, kos penghantaran & jumlah dikira semula di server
+      // (place_order). Untuk pesanan Billplz (bayar online), stok TIDAK ditolak
+      // sekarang — cuma selepas webhook billplz-notification sahkan bayaran
+      // BERJAYA. Pesanan manual (upload resit) tolak stok terus di server.
+      const result = await placeOrder({name, phone, address, city, postcode, email}, state.cart, paymentMethod, checkoutReceiptData);
       if(!result.ok){
-        submitBtn.disabled = false; submitBtn.textContent = 'Hantar Pesanan';
-        const errMsg = (result.error && result.error.message) ? result.error.message : (result.error || 'ralat tidak diketahui');
-        toast(`Gagal hantar pesanan: ${errMsg} — sila cuba lagi`, 5000);
+        submitBtn.disabled = false; submitBtn.textContent = paymentMethod==='billplz' ? 'Teruskan ke Pembayaran' : 'Hantar Pesanan';
+        toast(`Gagal hantar pesanan: ${result.error || 'ralat tidak diketahui'} — sila cuba lagi`, 5000);
         return;
       }
-      // Untuk pesanan Billplz (bayar online), JANGAN tolak stok sekarang — pelanggan
-      // belum sahkan bayaran lagi (mungkin abandon di laman Billplz). Stok cuma
-      // ditolak selepas webhook billplz-notification sahkan bayaran BERJAYA.
-      // Untuk pesanan manual (upload resit), stok ditolak terus macam biasa
-      // sebab upload resit dah jadi tanda niat bayaran yang lebih kukuh.
+      const order = result.order;
       if(paymentMethod !== 'billplz'){
         for(const line of state.cart){
           const p = findProduct(line.productId);
-          if(!p) continue;
-          const stockResult = await decrementStockRow(p.id, line.qty);
-          if(stockResult.ok){
-            p.stock = Math.max((p.stock||0) - line.qty, 0);
-          }
+          if(p) p.stock = Math.max((p.stock||0) - line.qty, 0);
         }
       }
       saveCustomerProfile({name, phone, address, city, postcode, email});
@@ -1149,10 +1114,10 @@
       // "Teruskan ke Pembayaran", belum tentu jadi bayar (mungkin batal di laman
       // Billplz). Notify admin cuma lepas bayaran DISAHKAN — dihantar terus oleh
       // Edge Function billplz-notification bila webhook diterima dari Billplz.
-      // Untuk pesanan manual (upload resit), notify terus macam biasa sebab
-      // upload resit dah jadi tanda niat bayaran yang kukuh.
+      // Untuk pesanan manual (upload resit), server (store-api) hantar notifikasi
+      // Telegram — token Telegram tak lagi didedahkan kepada browser.
       if(paymentMethod !== 'billplz'){
-        sendTelegramNotification(orderTelegramMessage(order));
+        storeApi('notify_new_order', {orderId: order.id});
       }
       addToMyOrders(order);
       state.cart = [];
@@ -1171,13 +1136,8 @@
               'Authorization': 'Bearer ' + window.SUPABASE_ANON_KEY,
               'apikey': window.SUPABASE_ANON_KEY
             },
-            body: JSON.stringify({
-              orderId: order.id,
-              amount: order.total,
-              customerName: name,
-              customerEmail: email,
-              customerPhone: phone
-            })
+            // Jumlah & butiran pelanggan diambil dari database oleh server
+            body: JSON.stringify({orderId: order.id})
           });
           const data = await res.json();
           if(data.ok && data.paymentUrl){
@@ -1476,18 +1436,36 @@
         <div class="admin-login">
           <div style="font-size:32px;">🔒</div>
           <div style="margin:8px 0 4px;font-weight:600;">Masukkan PIN Login</div>
-          <input type="password" id="adminPinInput" inputmode="numeric" maxlength="8" placeholder="••••">
+          <input type="password" id="adminPinInput" maxlength="64" placeholder="••••" autocomplete="current-password">
           <div><button class="btn" id="adminUnlockBtn">Login</button></div>
         </div>`;
-      document.getElementById('adminUnlockBtn').addEventListener('click', ()=>{
-        const val = document.getElementById('adminPinInput').value;
-        if(val === state.settings.adminPin){
-          state.adminUnlocked = true;
-          renderAdmin();
-        } else {
-          toast('PIN salah');
+      const pinInput = document.getElementById('adminPinInput');
+      const unlockBtn = document.getElementById('adminUnlockBtn');
+      async function doAdminLogin(){
+        const val = pinInput.value;
+        if(!val){ toast('Sila masukkan PIN'); return; }
+        unlockBtn.disabled = true; unlockBtn.textContent = 'Menyemak...';
+        // PIN disemak di SERVER (hash bcrypt + had cubaan) — bukan dalam browser
+        const res = await storeApi('login', {pin: val});
+        unlockBtn.disabled = false; unlockBtn.textContent = 'Login';
+        if(!res.ok || !res.token){
+          toast(res.error || 'PIN salah', 3500);
+          return;
         }
-      });
+        setAdminToken(res.token);
+        // Mesti berjaya muat tetapan admin (Telegram/sender) dulu — kalau tak,
+        // tekan "Simpan Tetapan" nanti akan kosongkan nilai sedia ada
+        const settingsRes = await loadAdminSettings();
+        if(!settingsRes.ok){
+          setAdminToken('');
+          toast('Gagal muat tetapan admin: ' + (settingsRes.error || 'ralat tidak diketahui'), 4000);
+          return;
+        }
+        state.adminUnlocked = true;
+        renderAdmin();
+      }
+      unlockBtn.addEventListener('click', doAdminLogin);
+      pinInput.addEventListener('keydown', (e)=>{ if(e.key==='Enter') doAdminLogin(); });
       return;
     }
     el.innerHTML = `
@@ -1503,6 +1481,9 @@
     if(headerActions){
       headerActions.innerHTML = `<button type="button" class="btn small outline" id="adminLogoutBtn" style="background:rgba(255,255,255,0.14);color:#fff;border-color:rgba(255,255,255,0.4);">🔒 Logout</button>`;
       document.getElementById('adminLogoutBtn').addEventListener('click', ()=>{
+        storeApi('logout');
+        setAdminToken('');
+        clearAdminSettings();
         state.adminUnlocked = false;
         adminTab = 'products';
         renderAdmin();
@@ -1560,7 +1541,7 @@
       const delId = b.getAttribute('data-del');
       const result = await deleteProductRow(delId);
       if(!result.ok){
-        toast('Gagal padam — semak sambungan Supabase');
+        toast('Gagal padam: ' + (result.error || 'ralat tidak diketahui'), 4000);
         return;
       }
       state.products = state.products.filter(p=>p.id!==delId);
@@ -1713,19 +1694,15 @@
         const cleanVariants = variants.filter(v=>v.name.trim() && v.options.length);
         const cleanTestimonials = testimonials.filter(t=>t.name.trim() && t.comment.trim());
         const category = document.getElementById('pCategory').value;
-        let result;
-        if(isNew){
-          const newProduct = {id:uid('prod'), name, description:document.getElementById('pDesc').innerHTML.trim(), price, weight, images, variants:cleanVariants, category, stock, testimonials:cleanTestimonials};
-          result = await insertProductRow(newProduct);
-          if(result.ok){ state.products.push(newProduct); }
-        } else {
-          const backup = Object.assign({}, p);
-          Object.assign(p, {name, description:document.getElementById('pDesc').innerHTML.trim(), price, weight, images, variants:cleanVariants, category, stock, testimonials:cleanTestimonials});
-          result = await updateProductRow(p);
-          if(!result.ok){ Object.assign(p, backup); }
+        const fields = {name, description:document.getElementById('pDesc').innerHTML.trim(), price, weight, images, variants:cleanVariants, category, stock, testimonials:cleanTestimonials};
+        const result = await saveProductRow(Object.assign({id:p.id}, fields), isNew);
+        if(result.ok && result.product){
+          const saved = rowToProduct(result.product);
+          if(isNew) state.products.push(saved);
+          else Object.assign(p, saved);
         }
         if(!result.ok){
-          toast('Gagal simpan — semak sambungan Supabase (lihat Console untuk butiran)');
+          toast('Gagal simpan: ' + (result.error || 'ralat tidak diketahui'), 4000);
           saveBtn.disabled = false; saveBtn.textContent = 'Simpan';
           return;
         }
@@ -1791,7 +1768,7 @@
       });
       const result = await saveSettings();
       if(!result.ok){
-        toast('Gagal simpan kadar penghantaran — semak Console (F12)');
+        toast('Gagal simpan kadar penghantaran: ' + (result.error || 'ralat tidak diketahui'), 4000);
         return;
       }
       toast('Kadar penghantaran disimpan');
@@ -1878,13 +1855,13 @@
       const input = content.querySelector(`.tracking-input[data-order-id="${id}"]`);
       const newTracking = input.value.trim();
       const isNewTracking = newTracking && newTracking !== order.trackingNumber;
-      order.trackingNumber = newTracking;
-      state.ordersCache[id] = order;
-      const saveResult = await saveOrder(order);
+      const saveResult = await updateOrderRow(id, {trackingNumber: newTracking});
       if(!saveResult.ok){
-        toast('Gagal simpan no. tracking — semak Console (F12)');
+        toast('Gagal simpan no. tracking: ' + (saveResult.error || 'ralat tidak diketahui'), 4000);
         return;
       }
+      order.trackingNumber = newTracking;
+      state.ordersCache[id] = order;
       toast('No. tracking disimpan');
       if(isNewTracking && order.customer.email){
         openMailto(order.customer.email, `No. Tracking Pesanan Anda - ${order.id}`,
@@ -1929,6 +1906,8 @@
         const newStatus = sel.value;
 
         // Elak ketidakselarasan: status "Shipped" mesti ada No. Tracking dulu
+        // (server pun semak perkara yang sama)
+        const patch = {status: newStatus};
         if(newStatus==='shipped' && !order.trackingNumber){
           const trackingInput = content.querySelector(`.tracking-input[data-order-id="${id}"]`);
           const typedTracking = trackingInput ? trackingInput.value.trim() : '';
@@ -1938,22 +1917,17 @@
             return;
           }
           // Admin dah taip No. Tracking tapi belum tekan Simpan berasingan — simpan sekali
-          order.trackingNumber = typedTracking;
+          patch.trackingNumber = typedTracking;
         }
 
-        const justPaid = newStatus === 'paid' && order.status !== 'paid';
-        const justCompleted = newStatus === 'completed' && order.status !== 'completed';
-        order.status = newStatus;
-        if(justCompleted) order.completedAt = new Date().toISOString();
-        if(justPaid){
-          sendTelegramNotification(`✅ <b>Bayaran Disahkan</b>\n\nNo. Pesanan: ${order.id}\nNama: ${escapeHtml(order.customer.name)}\nJumlah: ${money(order.total)}`);
-        }
-        state.ordersCache[id] = order;
-        const saveResult = await saveOrder(order);
+        // Notifikasi Telegram "Bayaran Disahkan" dihantar oleh server (store-api)
+        const saveResult = await updateOrderRow(id, patch);
         if(!saveResult.ok){
-          toast('Gagal kemas kini status — semak Console (F12)');
+          toast('Gagal kemas kini status: ' + (saveResult.error || 'ralat tidak diketahui'), 4000);
+          sel.value = order.status;
           return;
         }
+        if(saveResult.order) state.ordersCache[id] = rowToOrder(saveResult.order);
         toast('Status dikemaskini');
         renderAdminOrders(content);
       });
@@ -2010,46 +1984,17 @@
       submitBtn.disabled = true; submitBtn.textContent = 'Menghantar ke Pos Laju...';
       resultBox.innerHTML = '';
       try{
-        const res = await fetch(window.WAYBILL_FUNCTION_URL, {
-          method: 'POST',
-          headers: {
-            'Content-Type':'application/json',
-            'Authorization': 'Bearer ' + window.SUPABASE_ANON_KEY,
-            'apikey': window.SUPABASE_ANON_KEY
-          },
-          body: JSON.stringify({
-            orderId: order.id,
-            sender: {
-              name: state.settings.senderName,
-              phone_number: state.settings.senderPhone,
-              email: state.settings.senderEmail,
-              address1: state.settings.senderAddress1,
-              city: state.settings.senderCity,
-              state: state.settings.senderState,
-              postcode: state.settings.senderPostcode
-            },
-            receiver: {
-              name: order.customer.name,
-              phone_number: order.customer.phone.startsWith('+')?order.customer.phone:('+6'+order.customer.phone.replace(/^0/,'')),
-              address1: order.customer.address,
-              city: city,
-              state: stateVal,
-              postcode: order.customer.postcode
-            },
-            weight: weight,
-            items: order.items.map(it=>({name:it.name, quantity:it.qty, value:it.price}))
-          })
-        });
-        const data = await res.json();
+        // Maklumat sender & penerima diambil dari database oleh server (store-api)
+        const data = await storeApi('generate_waybill', {orderId: order.id, city, state: stateVal, weight});
         submitBtn.disabled = false; submitBtn.textContent = '🚀 Hantar ke Pos Laju & Jana Waybill';
         if(!data.ok){
           resultBox.innerHTML = `<div class="hint" style="color:var(--danger);">Gagal: ${escapeHtml(JSON.stringify(data.error))}</div>`;
           return;
         }
+        // Server dah simpan No. Tracking & PDF waybill ke pesanan
         order.trackingNumber = data.tracking_no;
         order.waybillPdfUrl = data.label_pdf_url;
         state.ordersCache[orderId] = order;
-        await saveOrder(order);
         resultBox.innerHTML = `<div class="hint" style="color:var(--success);">✅ Berjaya! No. Tracking: <strong>${escapeHtml(data.tracking_no)}</strong></div><a href="${data.label_pdf_url}" target="_blank" rel="noopener" class="btn small accent" style="display:inline-block;margin-top:8px;text-decoration:none;">📄 Buka & Print Waybill (A6)</a>`;
         toast('Waybill berjaya dijana!');
       }catch(err){
@@ -2082,7 +2027,7 @@
           <input type="file" accept="image/*" id="qrInput">
         </div>
       </div>
-      <div class="form-group"><span class="field-label">Tukar PIN Login</span><input type="text" id="pinInput" value="${escapeHtml(state.settings.adminPin)}" maxlength="8"></div>
+      <div class="form-group"><span class="field-label">Tukar PIN Login</span><input type="password" id="pinInput" value="" maxlength="64" placeholder="Kosongkan jika tak mahu tukar" autocomplete="new-password"><div class="hint">Minimum 6 aksara. Lebih panjang lebih selamat. Selepas tukar, sesi admin di peranti lain akan tamat.</div></div>
 
       <div class="section-title">Maklumat Kedai (Sender Waybill)</div>
       <div class="hint" style="margin-bottom:8px;">Maklumat ni digunakan sebagai "penghantar" bila jana waybill Pos Laju.</div>
@@ -2228,22 +2173,16 @@
       const token = document.getElementById('telegramTokenInput').value.trim();
       const chatId = document.getElementById('telegramChatIdInput').value.trim();
       if(!token || !chatId){ toast('Sila isi Bot Token & Chat ID dahulu'); return; }
-      const oldToken = state.settings.telegramBotToken, oldChatId = state.settings.telegramChatId;
-      state.settings.telegramBotToken = token;
-      state.settings.telegramChatId = chatId;
       const testBtn = document.getElementById('testTelegramBtn');
       testBtn.disabled = true; testBtn.textContent = 'Menghantar...';
-      const result = await sendTelegramNotification('🔔 Ini mesej test dari CKT Global Webstore. Jika anda terima ini, sambungan Telegram berfungsi!');
+      const result = await storeApi('telegram_test', {token, chatId});
       testBtn.disabled = false; testBtn.textContent = '📨 Hantar Mesej Test';
-      state.settings.telegramBotToken = oldToken;
-      state.settings.telegramChatId = oldChatId;
       if(result.ok){ toast('Mesej test berjaya dihantar! Semak Telegram anda'); }
       else{ toast('Gagal hantar — semak Bot Token/Chat ID (' + (result.error||'ralat tidak diketahui') + ')'); }
     });
     document.getElementById('saveSettingsBtn').addEventListener('click', async ()=>{
       const backup = Object.assign({}, state.settings);
       state.settings.storeName = document.getElementById('storeNameInput').value.trim() || 'Kedai Saya';
-      state.settings.adminPin = document.getElementById('pinInput').value.trim() || '1234';
       state.settings.telegramBotToken = document.getElementById('telegramTokenInput').value.trim();
       state.settings.telegramChatId = document.getElementById('telegramChatIdInput').value.trim();
       state.settings.senderName = document.getElementById('senderNameInput').value.trim();
@@ -2265,12 +2204,23 @@
       }
       const saveBtn = document.getElementById('saveSettingsBtn');
       saveBtn.disabled = true; saveBtn.textContent = 'Menyimpan...';
-      const result = await saveSettings();
+      const newPin = document.getElementById('pinInput').value.trim();
+      if(newPin && newPin.length < 6){
+        state.settings = backup;
+        saveBtn.disabled = false; saveBtn.textContent = 'Simpan Tetapan';
+        toast('PIN baharu mesti sekurang-kurangnya 6 aksara');
+        return;
+      }
+      const result = await saveSettings(newPin);
       saveBtn.disabled = false; saveBtn.textContent = 'Simpan Tetapan';
       if(!result.ok){
         state.settings = backup;
-        toast('Gagal simpan — semak Console (F12) untuk mesej error penuh');
+        toast('Gagal simpan: ' + (result.error || 'ralat tidak diketahui'), 4000);
         return;
+      }
+      if(result.pinChanged){
+        document.getElementById('pinInput').value = '';
+        toast('PIN baharu disimpan');
       }
       renderCatalog();
       renderPromoVideo();
@@ -2310,6 +2260,12 @@
         renderTrack(trackOrderId);
         openPanel('trackPanel');
       }
+    }
+    // Sambung semula sesi admin (token dalam sessionStorage) selepas refresh
+    if(getAdminToken()){
+      const settingsRes = await loadAdminSettings();
+      if(settingsRes.ok) state.adminUnlocked = true;
+      else setAdminToken('');
     }
     // Butang "Login" dah dibuang dari nav bar bawah (customer tak perlu nampak) —
     // admin akses panel ni terus guna URL ?admin=1 (cth: cktwebstore.com/?admin=1)

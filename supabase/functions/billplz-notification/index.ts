@@ -220,13 +220,6 @@ Deno.serve(async (req) => {
 
     const receivedSignature = params.get("x_signature") ?? "";
 
-    // DEBUG SEMENTARA — log raw body & panjang secret supaya boleh kesan sama
-    // ada nama field tak macam dijangka, atau BILLPLZ_X_SIGNATURE_KEY tersilap
-    // (extra space/newline dsb). BUANG log ni lepas isu signature selesai.
-    console.log("billplz-notification DEBUG rawBody:", rawBody);
-    console.log("billplz-notification DEBUG receivedSignature:", JSON.stringify(receivedSignature), "length:", receivedSignature.length);
-    console.log("billplz-notification DEBUG secret length:", BILLPLZ_X_SIGNATURE_KEY.length, "secret first/last char code:", BILLPLZ_X_SIGNATURE_KEY.charCodeAt(0), BILLPLZ_X_SIGNATURE_KEY.charCodeAt(BILLPLZ_X_SIGNATURE_KEY.length - 1));
-
     // 1. Sahkan tandatangan dulu — TOLAK terus kalau tak sepadan, ini pertahanan
     //    utama supaya orang lain tak boleh hantar notifikasi palsu "dah bayar"
     const entries: [string, string][] = [];
@@ -270,7 +263,7 @@ Deno.serve(async (req) => {
       // kalau Billplz hantar notifikasi sama lebih dari sekali (biasa berlaku
       // pada webhook gateway)
       const getRes = await fetch(
-        `${supabaseUrl}/rest/v1/orders?billplz_bill_id=eq.${billId}&select=id,status,items,customer,total,shipping_cost`,
+        `${supabaseUrl}/rest/v1/orders?billplz_bill_id=eq.${encodeURIComponent(billId)}&select=id,status,items,customer,total,shipping_cost`,
         {
           headers: {
             "apikey": supabaseServiceKey,
@@ -289,6 +282,21 @@ Deno.serve(async (req) => {
         });
       }
       const orderId = existingOrder.id;
+
+      // KESELAMATAN: pastikan amaun yang DIBAYAR sama dengan jumlah pesanan
+      // dalam database (dalam sen). Kalau tak sama, jangan tanda "paid".
+      const paidCents = Number(params.get("paid_amount") ?? params.get("amount"));
+      const expectedCents = Math.round(Number(existingOrder.total) * 100);
+      if (!Number.isFinite(paidCents) || paidCents !== expectedCents) {
+        console.error(
+          "billplz-notification: amaun dibayar tak sepadan untuk pesanan", orderId,
+          "| dibayar (sen):", paidCents, "| dijangka (sen):", expectedCents,
+        );
+        return new Response(JSON.stringify({ ok: false, error: "Amaun tidak sepadan" }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       const isFirstTimePaid = existingOrder.status !== "paid";
 
       if (isFirstTimePaid) {
@@ -309,7 +317,7 @@ Deno.serve(async (req) => {
         }
       }
 
-      const updateRes = await fetch(`${supabaseUrl}/rest/v1/orders?id=eq.${orderId}`, {
+      const updateRes = await fetch(`${supabaseUrl}/rest/v1/orders?id=eq.${encodeURIComponent(orderId)}`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
@@ -338,7 +346,7 @@ Deno.serve(async (req) => {
     });
   } catch (err) {
     console.error("billplz-notification error:", err);
-    return new Response(JSON.stringify({ ok: false, error: String(err) }), {
+    return new Response(JSON.stringify({ ok: false, error: "Ralat server" }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
