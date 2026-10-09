@@ -1039,6 +1039,12 @@
       const prev = document.getElementById('receiptPreview');
       const promptText = document.getElementById('receiptPromptText');
       if(file.type === 'application/pdf'){
+        // Had sama dengan server (migration-had-pesanan.sql)
+        if(file.size > 2*1024*1024){
+          toast('Fail PDF terlalu besar (maksimum 2MB) — sila guna screenshot/gambar resit', 4000);
+          e.target.value = '';
+          return;
+        }
         // PDFs can't go through the canvas resize path — read as-is
         const dataUrl = await new Promise((resolve,reject)=>{
           const reader = new FileReader();

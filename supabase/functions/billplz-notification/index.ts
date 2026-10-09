@@ -22,16 +22,10 @@
 //                              Account Settings jika guna X Signature akaun)
 //   SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY -> automatik disediakan Supabase
 //
-// NOTA pasal X-Signature: dokumentasi/implementasi Billplz yang tersedia
-// tidak seragam pasal susunan parameter (ikut urutan asal dihantar, ATAU
-// disusun mengikut nama) dan cara gabung (terus "namavalue" TANPA separator,
-// ATAU dengan separator "|"). Sebab tu verifySignature() di bawah cuba
-// BEBERAPA kombinasi popular sekaligus dan terima mana-mana yang padan —
-// ini tak kurangkan keselamatan (orang jahat tetap perlu tahu
-// BILLPLZ_X_SIGNATURE_KEY sebenar untuk hasilkan mana-mana signature yang
-// sah), cuma lebih toleran kepada variasi format. verifySignature() log
-// kombinasi mana yang padan (console.log, bukan console.error) — boleh
-// rujuk log tu untuk kemas kini code ni guna SATU format yang disahkan sahaja.
+// X-Signature disahkan guna formula RASMI Billplz sahaja (lihat
+// computeOfficialBillplzSignature di bawah). Versi lama juga cuba 12
+// kombinasi format lain semasa formula sebenar belum diketahui — dah
+// dibuang selepas formula rasmi disahkan berfungsi di production.
 
 const BILLPLZ_X_SIGNATURE_KEY = Deno.env.get("BILLPLZ_X_SIGNATURE_KEY")!;
 
@@ -54,26 +48,6 @@ async function hmacSha256Hex(text: string, secret: string): Promise<string> {
   );
   const sigBuffer = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text));
   return toHex(new Uint8Array(sigBuffer));
-}
-
-// Cuba beberapa kombinasi susunan/separator yang biasa digunakan implementasi
-// Billplz (lihat NOTA di atas fail ni), pulangkan label kombinasi pertama
-// yang padan dengan signature diterima, atau null kalau tiada satu pun padan.
-// Pecahkan rawBody secara literal (TANPA decode value — kekal bentuk
-// percent-encoded asal, cth "%40" bukan "@") — sebahagian implementasi
-// Billplz mengira signature atas bentuk mentah ni, bukan nilai ter-decode.
-function parseRawEntries(rawBody: string): [string, string][] {
-  const entries: [string, string][] = [];
-  for (const segment of rawBody.split("&")) {
-    if (!segment) continue;
-    const eqIdx = segment.indexOf("=");
-    const rawKey = eqIdx === -1 ? segment : segment.slice(0, eqIdx);
-    const rawValue = eqIdx === -1 ? "" : segment.slice(eqIdx + 1);
-    const key = decodeURIComponent(rawKey.replace(/\+/g, " "));
-    if (key === "x_signature") continue;
-    entries.push([key, rawValue]);
-  }
-  return entries;
 }
 
 // Field-field SPESIFIK yang Billplz gunakan untuk Callback signature (disahkan
@@ -106,43 +80,19 @@ async function computeOfficialBillplzSignature(params: URLSearchParams, secret: 
   return await hmacSha256Hex(pairs.join("|"), secret);
 }
 
-async function verifySignature(
-  params: URLSearchParams,
-  originalOrderEntries: [string, string][],
-  rawBody: string,
-  receivedSignature: string,
-  secret: string,
-): Promise<string | null> {
-  const receivedLower = receivedSignature.toLowerCase();
+async function verifySignature(params: URLSearchParams, receivedSignature: string, secret: string): Promise<boolean> {
+  if (!receivedSignature) return false;
+  const expected = await computeOfficialBillplzSignature(params, secret);
+  return timingSafeEqual(expected, receivedSignature.toLowerCase());
+}
 
-  // Cuba formula RASMI dahulu (paling berkemungkinan betul)
-  const official = await computeOfficialBillplzSignature(params, secret);
-  if (official === receivedLower) return "rasmi-billplz-woocommerce";
-
-  // Fallback: kombinasi lain (kekal sebagai jaring keselamatan sekiranya versi
-  // API/dokumentasi berbeza)
-  const sortedEntries = [...originalOrderEntries].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-  const rawEntries = parseRawEntries(rawBody);
-  const sortedRawEntries = [...rawEntries].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-  const candidates: Record<string, string> = {
-    "urutan-asal|tiada-separator": originalOrderEntries.map(([k, v]) => `${k}${v}`).join(""),
-    "urutan-asal|pipe-separator": originalOrderEntries.map(([k, v]) => `${k}${v}`).join("|"),
-    "susun-nama|tiada-separator": sortedEntries.map(([k, v]) => `${k}${v}`).join(""),
-    "susun-nama|pipe-separator": sortedEntries.map(([k, v]) => `${k}${v}`).join("|"),
-    "urutan-asal|query-string": originalOrderEntries.map(([k, v]) => `${k}=${v}`).join("&"),
-    "susun-nama|query-string": sortedEntries.map(([k, v]) => `${k}=${v}`).join("&"),
-    "mentah-urutan-asal|tiada-separator": rawEntries.map(([k, v]) => `${k}${v}`).join(""),
-    "mentah-urutan-asal|pipe-separator": rawEntries.map(([k, v]) => `${k}${v}`).join("|"),
-    "mentah-susun-nama|tiada-separator": sortedRawEntries.map(([k, v]) => `${k}${v}`).join(""),
-    "mentah-susun-nama|pipe-separator": sortedRawEntries.map(([k, v]) => `${k}${v}`).join("|"),
-    "mentah-urutan-asal|query-string": rawEntries.map(([k, v]) => `${k}=${v}`).join("&"),
-    "mentah-susun-nama|query-string": sortedRawEntries.map(([k, v]) => `${k}=${v}`).join("&"),
-  };
-  for (const [label, source] of Object.entries(candidates)) {
-    const computed = await hmacSha256Hex(source, secret);
-    if (computed === receivedLower) return label;
-  }
-  return null;
+// Bandingkan dua string tanpa bocor maklumat masa (elak teka signature
+// sedikit demi sedikit berdasarkan berapa lama perbandingan mengambil masa)
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }
 
 function escapeHtml(text: string): string {
@@ -222,21 +172,15 @@ Deno.serve(async (req) => {
 
     // 1. Sahkan tandatangan dulu — TOLAK terus kalau tak sepadan, ini pertahanan
     //    utama supaya orang lain tak boleh hantar notifikasi palsu "dah bayar"
-    const entries: [string, string][] = [];
-    for (const [key, value] of params.entries()) {
-      if (key === "x_signature") continue;
-      entries.push([key, value]);
-    }
-    const matchedFormat = await verifySignature(params, entries, rawBody, receivedSignature, BILLPLZ_X_SIGNATURE_KEY);
+    const signatureOk = await verifySignature(params, receivedSignature, BILLPLZ_X_SIGNATURE_KEY);
 
-    if (!matchedFormat) {
-      console.error("billplz-notification: signature tak sepadan (semua format dicuba gagal) — mungkin bukan dari Billplz sebenar, atau BILLPLZ_X_SIGNATURE_KEY salah");
+    if (!signatureOk) {
+      console.error("billplz-notification: signature tak sepadan — mungkin bukan dari Billplz sebenar, atau BILLPLZ_X_SIGNATURE_KEY salah");
       return new Response(JSON.stringify({ ok: false, error: "Invalid signature" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    console.log(`billplz-notification: signature sah (format: ${matchedFormat})`);
 
     // 2. Signature sah — proses notifikasi
     // NOTA: webhook Billplz sebenar TIDAK bawa balik reference_1/reference_2
