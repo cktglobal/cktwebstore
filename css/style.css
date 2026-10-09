@@ -350,3 +350,37 @@
   }
   .toast.show{opacity:1;}
   .empty-hint{font-size:13px;color:var(--text-muted);text-align:center;padding:30px 10px;}
+
+  /* Kotak carian guna type="search" (elak autofill emel oleh Chrome) —
+     sembunyikan butang "x" bawaan browser, kedai dah ada butang ✕ sendiri */
+  .search-box input[type="search"]{-webkit-appearance:none;appearance:none;}
+  .search-box input[type="search"]::-webkit-search-cancel-button,
+  .search-box input[type="search"]::-webkit-search-decoration{-webkit-appearance:none;display:none;}
+
+  /* ============================================================
+     DESKTOP / TABLET — layout melebar ikut skrin (macam kedai AllOrder).
+     Telefon (< 768px) kekal sama seperti sebelum ni.
+     ============================================================ */
+  @media (min-width: 768px){
+    #app{max-width:1200px;}
+    .topbar{padding-left:24px;padding-right:24px;}
+    .category-bar,.search-wrap{padding-left:24px;padding-right:24px;}
+    .category-bar{flex-wrap:wrap;overflow-x:visible;}
+    .promo-video-wrap{padding:0 24px 10px;}
+    /* Banner imej kekal penuh lebar; video dihadkan supaya tak terlalu tinggi */
+    .promo-video-box:not(.promo-image-box){max-width:720px;margin:0 auto;}
+    .catalog{grid-template-columns:repeat(3, minmax(0, 1fr));gap:16px;padding:14px 24px 96px;}
+    .product-card .info{padding:11px 12px 13px;}
+    .product-card .name{font-size:14.5px;}
+    .product-card .quick-add-fab{width:34px;height:34px;font-size:20px;}
+    .bottom-nav{max-width:1200px;}
+    /* Panel (produk, troli, checkout, jejak, admin) — lajur tengah lebih
+       lebar dengan bayang supaya nampak terpisah dari katalog di belakang */
+    .panel{max-width:760px;box-shadow:0 0 32px rgba(15,42,43,0.18);}
+    .sticky-cta{max-width:760px;}
+    .detail-img-scroll{max-width:420px;margin-left:auto;margin-right:auto;}
+    .thumbs{justify-content:center;}
+  }
+  @media (min-width: 1024px){
+    .catalog{grid-template-columns:repeat(4, minmax(0, 1fr));}
+  }
