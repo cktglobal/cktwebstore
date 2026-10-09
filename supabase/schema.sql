@@ -73,11 +73,12 @@ create table if not exists orders (
 
 -- ============================================================
 -- Row Level Security (RLS) — Peraturan Akses
--- Nota: Pendekatan ini "terbuka" (public read/write) supaya app
--- berfungsi tanpa sistem log masuk pelanggan/admin sebenar.
--- Perlindungan admin bergantung pada PIN dalam app (bukan RLS).
--- Kalau perniagaan berkembang, elok upgrade ke Supabase Auth
--- supaya hanya admin sah boleh ubah produk/tetapan/status pesanan.
+-- Awam cuma boleh BACA settings & products. Tiada akses terus ke orders.
+-- Semua penulisan dibuat melalui fungsi DB / Edge Function store-api.
+-- PENTING: selepas fail ni (dan migration-*.sql lain), jalankan
+-- migration-keselamatan.sql PALING AKHIR — ia cipta fungsi place_order,
+-- track_order, login admin dsb. dan hadkan lajur settings yang boleh
+-- dibaca awam.
 -- ============================================================
 alter table settings enable row level security;
 alter table products enable row level security;
@@ -85,26 +86,9 @@ alter table orders enable row level security;
 
 drop policy if exists "public read settings" on settings;
 create policy "public read settings" on settings for select using (true);
-drop policy if exists "public update settings" on settings;
-create policy "public update settings" on settings for update using (true);
 
 drop policy if exists "public read products" on products;
 create policy "public read products" on products for select using (true);
-drop policy if exists "public write products" on products;
-create policy "public write products" on products for insert with check (true);
-drop policy if exists "public update products" on products;
-create policy "public update products" on products for update using (true);
-drop policy if exists "public delete products" on products;
-create policy "public delete products" on products for delete using (true);
-
-drop policy if exists "public read orders" on orders;
-create policy "public read orders" on orders for select using (true);
-drop policy if exists "public write orders" on orders;
-create policy "public write orders" on orders for insert with check (true);
-drop policy if exists "public update orders" on orders;
-create policy "public update orders" on orders for update using (true);
-drop policy if exists "public delete orders" on orders;
-create policy "public delete orders" on orders for delete using (true);
 
 -- ============================================================
 -- Fungsi: tolak stok produk secara atomic (selamat dari race condition

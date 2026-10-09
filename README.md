@@ -29,9 +29,12 @@ cktwebstore/
 2. Buka **SQL Editor** → jalankan kandungan `supabase/schema.sql`
 3. Kalau projek Supabase sedia ada (dah ada jadual `products` tanpa lajur kategori),
    jalankan juga `supabase/migration-tambah-kategori.sql`
-4. Dapatkan **Project URL** dan **anon public key** di
+4. **Paling akhir**, jalankan `supabase/migration-keselamatan.sql` — ia kunci akses
+   pangkalan data & cipta fungsi pesanan/login admin. Deploy juga Edge Function
+   `store-api`. Lihat `docs/KESELAMATAN.md` untuk langkah penuh.
+5. Dapatkan **Project URL** dan **anon public key** di
    **Project Settings → Data API**
-5. Masukkan kedua-dua nilai tu dalam `js/config.js`:
+6. Masukkan kedua-dua nilai tu dalam `js/config.js`:
    ```js
    window.SUPABASE_URL = "https://xxxxxxxx.supabase.co";
    window.SUPABASE_ANON_KEY = "eyJhbGciOi...";
@@ -107,8 +110,10 @@ app terus ke skrin utama telefon mereka, tanpa App Store/Play Store.
 
 ## Admin
 
-- Akses panel admin melalui tab **⚙️ Admin** dalam app
-- PIN lalai: `1234` (tukar serta-merta di Admin → Tetapan selepas guna kali pertama)
+- Akses panel admin melalui `cktwebstore.com/?admin=1`
+- PIN lalai untuk pemasangan baharu: `1234` — tukar serta-merta di Admin → Tetapan (min 6 aksara)
+- PIN disemak di server (hash bcrypt, had cubaan) dan semua operasi admin melalui
+  Edge Function `store-api` — lihat `docs/KESELAMATAN.md`
 
 ## Nota Penting
 
