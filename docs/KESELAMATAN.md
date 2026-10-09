@@ -37,6 +37,7 @@ supabase functions deploy generate-waybill --project-ref dhouwiyotjxfijtsspzt
 **Cara B — Dashboard:** Edge Functions → **Deploy a new function** → namakan `store-api` → tampal kandungan `supabase/functions/store-api/index.ts` → Deploy. Untuk 3 function lain, buka function tu → **Code** → tampal kandungan baharu → Deploy.
 
 Nota:
+- `store-api`, `billplz-create-payment` & `generate-waybill`: **"Verify JWT" ON** (lalai — dipanggil dari browser dengan anon key).
 - `billplz-notification` mesti kekal **"Verify JWT" OFF**, sebab webhook Billplz tak bawa JWT (sama macam sekarang).
 - `store-api` guna secrets Pos Laju yang sama (`POS_CLIENT_ID`, `POS_CLIENT_SECRET`, `POS_ACCOUNT_NUMBER`, `POS_BASE_URL`). Secrets Supabase dikongsi semua function dalam projek, jadi tak perlu set semula.
 - Selepas yakin semuanya OK, boleh padam terus function `generate-waybill` di Dashboard.
@@ -47,7 +48,9 @@ Supabase Dashboard → **SQL Editor** → New query → tampal **keseluruhan** `
 PIN admin sedia ada **kekal sama**. Ia cuma ditukar kepada hash.
 
 ### 4. Deploy frontend
-Merge branch ni ke `main`. Netlify akan deploy `index.html`, `js/app.js`, `js/config.js` dan `sw.js` yang baharu.
+Merge branch ni ke `main`. Netlify auto-deploy dari `main` (site "tiny-sawine-cf31da", disambung melalui GitHub App), jadi **merge = terus live** dalam masa ~1 minit. Semak status di Netlify → Project overview (Building → Published).
+
+Nota: Netlify **tidak** deploy Edge Functions. Fail `supabase/functions/*` mesti dideploy manual ke Supabase (langkah 2).
 
 ### 5. Uji
 1. Buka kedai → buat satu pesanan ujian (upload resit) → pastikan notifikasi Telegram sampai.
