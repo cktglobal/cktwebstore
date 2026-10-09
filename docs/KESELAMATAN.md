@@ -80,3 +80,17 @@ delete from admin_login_attempts where not success;
 - **Jejak ikut No. Telefon**: sesiapa yang tahu nombor telefon pelanggan boleh lihat senarai pesanannya (item, jumlah, status, nama), tetapi bukan alamat atau telefon. Kalau mahu lebih ketat, minta juga No. Pesanan atau 4 digit akhir.
 - **Anon key** memang awam (itu reka bentuk Supabase). Keselamatan bergantung pada polisi RLS dan grant dalam migration, jadi **jangan** jalankan semula fail lama yang buka polisi awam (`migration-betulkan-padam-pesanan.sql` kini dikosongkan atas sebab ni).
 - **Semakan lesen** (`license-check.js`) sengaja benarkan akses jika rangkaian gagal (fail-open).
+
+---
+
+## Pengukuhan tambahan (PR #5)
+
+| Perkara | Kesan | Langkah deploy |
+|---|---|---|
+| **Had pesanan** (`supabase/migration-had-pesanan.sql`) — resit maks 2MB, 5 pesanan/jam setiap telefon, 10/jam setiap IP, 100/jam seluruh kedai | Spam tak boleh penuhkan database pelan Free (500MB) | Jalankan fail SQL tu di SQL Editor (bila-bila masa, tak ganggu kedai) |
+| **Billplz guna formula rasmi sahaja** (`billplz-notification`) — 12 format lama dibuang, perbandingan signature tahan serangan masa | Kod lebih ringkas & ketat | Deploy semula function (Verify JWT kekal **OFF**) — tapi **semak log dulu** (lihat bawah) |
+| **Content Security Policy** (`netlify.toml`) + skrip service worker diasingkan | Kalau kod jahat tersisip, ia tak boleh jalan atau hantar data keluar | Automatik bila merge ke `main` |
+
+**Sebelum deploy `billplz-notification`:** Supabase → Edge Functions → `billplz-notification` → **Logs**, cari `signature sah (format:`. Semua bayaran berjaya sebelum ni patut tunjuk `format: rasmi-billplz-woocommerce`. Kalau ada format lain, **jangan deploy** versi baharu — beritahu developer dulu.
+
+Had pesanan boleh diubah atau dimatikan sementara — lihat nota di hujung `migration-had-pesanan.sql`.

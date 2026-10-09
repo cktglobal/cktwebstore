@@ -4,7 +4,7 @@
 // terputus seketika. Data produk/pesanan sebenar tetap perlu internet
 // (disimpan di Supabase), cuma bingkai app ni yang di-cache.
 
-const CACHE_NAME = 'cktglobal-shell-v22';
+const CACHE_NAME = 'cktglobal-shell-v23';
 const APP_SHELL = [
   './',
   './index.html',
