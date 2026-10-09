@@ -21,7 +21,7 @@
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=1784900000">
+<link rel="stylesheet" href="css/style.css?v=1784910000">
 </head>
 <body>
 <div id="app">
@@ -39,7 +39,7 @@
     <div class="search-wrap">
       <div class="search-box">
         <span class="search-icon">🔍</span>
-        <input type="text" id="searchInput" placeholder="Cari produk...">
+        <input type="search" id="searchInput" name="product-search" placeholder="Cari produk..." autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="search">
         <button type="button" class="search-clear-btn" id="searchClearBtn" style="display:none;">✕</button>
       </div>
     </div>
@@ -97,8 +97,8 @@
 <div class="toast" id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4"></script>
-<script src="js/config.js?v=1784900000"></script>
-<script src="js/app.js?v=1784900000"></script>
+<script src="js/config.js?v=1784910000"></script>
+<script src="js/app.js?v=1784910000"></script>
 <script>
   // Daftar service worker untuk PWA (Add to Home Screen)
   if('serviceWorker' in navigator){

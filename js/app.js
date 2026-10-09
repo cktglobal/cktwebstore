@@ -1436,8 +1436,14 @@
         <div class="admin-login">
           <div style="font-size:32px;">🔒</div>
           <div style="margin:8px 0 4px;font-weight:600;">Masukkan PIN Login</div>
-          <input type="password" id="adminPinInput" maxlength="64" placeholder="••••" autocomplete="current-password">
-          <div><button class="btn" id="adminUnlockBtn">Login</button></div>
+          <form id="adminLoginForm" autocomplete="on">
+            <!-- Medan "username" tersembunyi: tanpa ni, Chrome isi emel yang
+                 disimpan ke medan teks terdekat (kotak carian kedai) -->
+            <input type="text" name="username" value="admin" autocomplete="username" tabindex="-1" aria-hidden="true" readonly
+              style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;">
+            <input type="password" id="adminPinInput" name="password" maxlength="64" placeholder="••••" autocomplete="current-password">
+            <div><button type="submit" class="btn" id="adminUnlockBtn">Login</button></div>
+          </form>
         </div>`;
       const pinInput = document.getElementById('adminPinInput');
       const unlockBtn = document.getElementById('adminUnlockBtn');
@@ -1464,8 +1470,10 @@
         state.adminUnlocked = true;
         renderAdmin();
       }
-      unlockBtn.addEventListener('click', doAdminLogin);
-      pinInput.addEventListener('keydown', (e)=>{ if(e.key==='Enter') doAdminLogin(); });
+      document.getElementById('adminLoginForm').addEventListener('submit', (e)=>{
+        e.preventDefault();
+        doAdminLogin();
+      });
       return;
     }
     el.innerHTML = `
