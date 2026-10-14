@@ -168,6 +168,14 @@
     box-shadow:0 2px 6px rgba(0,0,0,0.25);padding:0;
   }
   .product-card .quick-add-fab:active{transform:scale(0.92);}
+  .product-card .share-fab{
+    position:absolute;right:8px;top:8px;width:28px;height:28px;border-radius:50%;
+    border:none;background:rgba(255,255,255,0.92);color:var(--primary-dark);
+    display:flex;align-items:center;justify-content:center;cursor:pointer;
+    box-shadow:0 2px 6px rgba(0,0,0,0.2);padding:0;
+  }
+  .product-card .share-fab svg{width:14px;height:14px;}
+  .product-card .share-fab:active{transform:scale(0.92);}
   .btn{
     border:none;border-radius:10px;padding:9px 16px;font-weight:600;font-size:14px;
     background:var(--primary);color:#fff;
@@ -224,6 +232,12 @@
     width:42px;height:42px;font-size:19px;display:flex;align-items:center;justify-content:center;
     box-shadow:0 2px 6px rgba(15,82,87,0.25);
   }
+  .detail-name-actions{display:flex;gap:8px;flex-shrink:0;}
+  .share-btn{
+    flex-shrink:0;background:var(--surface);color:var(--primary-dark);border:1px solid var(--border);border-radius:10px;
+    width:42px;height:42px;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;
+  }
+  .share-btn:active{transform:scale(0.95);}
   .quick-add-btn:disabled{background:var(--border);color:var(--text-muted);box-shadow:none;}
   .detail-price{font-family:var(--font-mono);font-size:19px;color:var(--primary-dark);font-weight:600;margin-bottom:10px;}
   .detail-desc{font-size:14px;color:var(--text);line-height:1.6;margin-bottom:16px;}
@@ -373,6 +387,7 @@
     .product-card .info{padding:11px 12px 13px;}
     .product-card .name{font-size:14.5px;}
     .product-card .quick-add-fab{width:34px;height:34px;font-size:20px;}
+    .product-card .share-fab{width:32px;height:32px;}
     .bottom-nav{max-width:1200px;}
     /* Panel (produk, troli, checkout, jejak, admin) — lajur tengah lebih
        lebar dengan bayang supaya nampak terpisah dari katalog di belakang */
