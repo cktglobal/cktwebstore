@@ -479,6 +479,37 @@
     return rows[0].rate;
   }
   function findProduct(id){ return state.products.find(p=>p.id===id); }
+
+  /* ================= KONGSI PRODUK ================= */
+  // Ikon "share" (3 titik bersambung) — SVG inline, tak perlu fail ikon luar.
+  const SHARE_ICON_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>';
+  // Pautan terus ke produk: <kedai>/?product=<id>. Bila dibuka, init() akan
+  // terus buka panel detail produk tersebut (lihat bahagian INIT di bawah).
+  function productShareUrl(p){
+    return window.location.origin + window.location.pathname + '?product=' + encodeURIComponent(p.id);
+  }
+  // Telefon: guna menu kongsi asli (WhatsApp, Telegram, FB dll). Desktop/browser
+  // yang tiada Web Share API: salin pautan ke clipboard. Kalau clipboard pun
+  // tak dibenarkan, papar pautan dalam prompt supaya pengguna boleh salin sendiri.
+  async function shareProduct(id){
+    const p = findProduct(id);
+    if(!p) return;
+    const url = productShareUrl(p);
+    if(navigator.share){
+      try{
+        await navigator.share({title: p.name, text: `${p.name} — ${money(p.price)}`, url});
+        return;
+      }catch(e){
+        if(e && e.name==='AbortError') return; // pengguna tutup menu kongsi
+      }
+    }
+    try{
+      await navigator.clipboard.writeText(url);
+      toast('Pautan produk disalin');
+    }catch(e){
+      window.prompt('Salin pautan produk ini:', url);
+    }
+  }
   function cartLineTotal(line){
     const p = findProduct(line.productId);
     if(!p) return 0;
@@ -629,7 +660,7 @@
         : `<div class="stock-tag" style="color:var(--text-muted);font-size:12px;">Baki stok: ${stockVal}</div>`;
       return `
       <div class="product-card ${outOfStock?'out-of-stock':''}" data-product-id="${p.id}">
-        <div class="img-wrap">${img}${outOfStock?'<div class="oos-overlay">Habis Stok</div>':`<button type="button" class="quick-add-fab" data-product-id="${p.id}" aria-label="Tambah ke troli">+</button>`}</div>
+        <div class="img-wrap">${img}${outOfStock?'<div class="oos-overlay">Habis Stok</div>':`<button type="button" class="quick-add-fab" data-product-id="${p.id}" aria-label="Tambah ke troli">+</button>`}<button type="button" class="share-fab" data-product-id="${p.id}" aria-label="Kongsi produk" title="Kongsi produk">${SHARE_ICON_SVG}</button></div>
         <div class="info">
           <div class="name">${escapeHtml(p.name)}</div>
           <div class="price-tag">${money(p.price)}</div>
@@ -647,6 +678,12 @@
       btn.addEventListener('click', (e)=>{
         e.stopPropagation();
         quickAddToCart(btn.getAttribute('data-product-id'));
+      });
+    });
+    el.querySelectorAll('.share-fab').forEach(btn=>{
+      btn.addEventListener('click', (e)=>{
+        e.stopPropagation();
+        shareProduct(btn.getAttribute('data-product-id'));
       });
     });
   }
@@ -747,7 +784,10 @@
       ${thumbsHtml}
       <div class="detail-name-row">
         <div class="detail-name">${escapeHtml(p.name)}</div>
-        <button type="button" class="quick-add-btn" id="quickAddBtn" ${outOfStock?'disabled':''} title="Tambah ke troli">🛒</button>
+        <div class="detail-name-actions">
+          <button type="button" class="share-btn" id="shareProductBtn" title="Kongsi produk" aria-label="Kongsi produk">${SHARE_ICON_SVG}</button>
+          <button type="button" class="quick-add-btn" id="quickAddBtn" ${outOfStock?'disabled':''} title="Tambah ke troli">🛒</button>
+        </div>
       </div>
       <div class="detail-price">${money(p.price)} <span style="font-size:12px;color:var(--text-muted);font-weight:400;">(${p.weight}kg)</span></div>
       ${stockNoticeHtml}
@@ -827,6 +867,8 @@
     // Butang cepat sebelah nama produk — untuk pelanggan yang nak terus beli
     // tanpa scroll baca description/pilih kuantiti. Sentiasa tambah 1 unit,
     // tak kira apa nilai kuantiti di stepper bawah (yang tu untuk butang penuh).
+    const shareProductBtn = document.getElementById('shareProductBtn');
+    if(shareProductBtn) shareProductBtn.addEventListener('click', ()=>shareProduct(p.id));
     const quickAddBtn = document.getElementById('quickAddBtn');
     if(quickAddBtn) quickAddBtn.addEventListener('click', async ()=>{
       if(outOfStock) return;
@@ -2274,6 +2316,14 @@
         renderTrack(trackOrderId);
         openPanel('trackPanel');
       }
+    }
+    // Pautan produk yang dikongsi (?product=<id>, lihat productShareUrl) —
+    // terus buka panel detail produk tu atas katalog.
+    const sharedProductId = new URLSearchParams(window.location.search).get('product');
+    if(sharedProductId){
+      history.replaceState(null, '', window.location.pathname);
+      if(findProduct(sharedProductId)) openProductDetail(sharedProductId);
+      else toast('Produk tidak dijumpai atau sudah tiada');
     }
     // Sambung semula sesi admin (token dalam sessionStorage) selepas refresh
     if(getAdminToken()){
