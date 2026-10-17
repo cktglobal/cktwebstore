@@ -63,7 +63,7 @@
   const state = {
     products: [],
     settings: {
-      storeName: "Kedai Saya",
+      storeName: "",
       storeLogo: STORE_LOGO,
       qrImage: null,
       promoVideoType: 'none',
@@ -216,7 +216,9 @@
   }
 
   function applyBrandingToHeader(storeName, storeLogo){
-    document.getElementById('storeNameDisplay').textContent = storeName || 'Kedai Saya';
+    // Kosongkan (bukan teks templat "Kedai Saya") selagi nama sebenar belum
+    // dimuatkan — elak nama templat terkelip sekejap masa loading.
+    document.getElementById('storeNameDisplay').textContent = storeName || '';
     const logoImg = document.getElementById('storeLogoImg');
     if(logoImg){
       if(storeLogo){ logoImg.src = storeLogo; logoImg.style.display='block'; }
@@ -633,7 +635,7 @@
 
   /* ================= RENDER: CATALOG ================= */
   function renderCatalog(){
-    document.getElementById('storeNameDisplay').textContent = state.settings.storeName || 'Kedai Saya';
+    document.getElementById('storeNameDisplay').textContent = state.settings.storeName || '';
     const logoImg = document.getElementById('storeLogoImg');
     if(logoImg){
       if(state.settings.storeLogo){ logoImg.src = state.settings.storeLogo; logoImg.style.display='block'; }
@@ -2286,6 +2288,10 @@
 
   /* ================= INIT ================= */
   async function init(){
+    // Papar nama/logo kedai dari cache (lawatan lepas) SERTA-MERTA — sebelum
+    // semakan lesen & muat data Supabase — supaya header tak kosong lama.
+    const cachedBranding = loadBrandingCache();
+    if(cachedBranding) applyBrandingToHeader(cachedBranding.storeName, cachedBranding.storeLogo);
     // Kalau license-check.js dimuatkan (untuk kedai klien berlesen),
     // tunggu keputusan semakan lesen dulu sebelum teruskan.
     if(window.__LICENSE_CHECK_PROMISE__){
@@ -2294,10 +2300,9 @@
         return; // license-check.js sudah papar skrin terkunci — hentikan init app terus
       }
     }
-    const cachedBranding = loadBrandingCache();
-    if(cachedBranding) applyBrandingToHeader(cachedBranding.storeName, cachedBranding.storeLogo);
     await loadAll();
-    saveBrandingCache(state.settings.storeName, state.settings.storeLogo);
+    // Jangan tindih cache dengan nama kosong kalau muat tetapan gagal (cth offline)
+    if(state.settings.storeName) saveBrandingCache(state.settings.storeName, state.settings.storeLogo);
     renderCategoryBar();
     renderPromoVideo();
     renderCatalog();
